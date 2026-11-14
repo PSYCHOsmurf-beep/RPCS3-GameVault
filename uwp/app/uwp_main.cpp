@@ -633,6 +633,134 @@ namespace
 			f.write(fmt::format("%.1f s: app memory %.3f GB of %.3f GB (%s)\n", get_system_time() / 1'000'000., usage / 1073741824.0, limit / 1073741824.0, when));
 	}
 
+	// Game Vault's report log (2026-11-14): "PS3 (RPCS3).log" in the shared games\logs folder, which Game Vault sends
+	// with its reports when the player said yes. RPCS3.log itself is far too big and mostly routine lines, so this one
+	// keeps only what helps find a problem: warnings, errors and fatal errors (a line repeated more than 20 times is
+	// counted, not written), RPCS3's "UWP:" notes, the game's name and serial, and once a minute
+	// "Game Vault: frame rate <fps>, CPU <%>, memory <MB> MB, memory limit <MB> MB" - the words Game Vault's report
+	// tools read for every emulator. A fatal error starts with "===== CRASH REPORT (RPCS3) =====".
+	std::atomic<u64> g_gv_frames{0};   // frames shown (uwp_present_frame)
+
+	struct gv_report_log final : logs::listener
+	{
+		std::mutex mutex;
+		fs::file file;
+		std::string path;
+		usz bytes = 0;
+		bool crash_marked = false;
+		std::unordered_map<std::string, u32> repeats;
+
+		static std::string publisher_logs_dir(const std::string& local_state)
+		{
+			// .../AppData/Local/Packages/<name>_<publisher id>/LocalState/ -> .../AppData/Local/Publishers/<publisher id>/games/logs/
+			const usz pk = local_state.rfind("/Packages/");
+			if (pk == umax)
+				return {};
+			const usz end = local_state.find('/', pk + 10);
+			const std::string family = local_state.substr(pk + 10, end - pk - 10);
+			const usz us = family.rfind('_');
+			if (us == umax)
+				return {};
+			return local_state.substr(0, pk) + "/Publishers/" + family.substr(us + 1) + "/games/logs/";
+		}
+
+		void open(const std::string& local_state)
+		{
+			const std::string dir = publisher_logs_dir(local_state);
+			if (dir.empty() || !fs::create_path(dir))
+				return;
+			std::lock_guard lock(mutex);
+			path = dir + "PS3 (RPCS3).log";
+			file.open(path, fs::rewrite);
+		}
+
+		void write_locked(std::string_view text)
+		{
+			if (!file)
+				return;
+			if (bytes > (6u << 20))
+			{
+				file.open(path, fs::rewrite);
+				const std::string_view note = "[Game Vault: the log passed 6 MB, older lines left out]\n";
+				file.write(note.data(), note.size());
+				bytes = note.size();
+				repeats.clear();
+			}
+			file.write(text.data(), text.size());
+			bytes += text.size();
+		}
+
+		void line(std::string_view text)
+		{
+			std::lock_guard lock(mutex);
+			write_locked(std::string(text) + "\n");
+		}
+
+		void log(u64 stamp, const logs::message& msg, std::string_view prefix, std::string_view text) override
+		{
+			const logs::level lv{msg};
+			const std::string_view channel = msg->name ? msg->name : "";
+			const bool problem = lv <= logs::level::warning && lv != logs::level::success && lv != logs::level::always;
+			const bool keep = problem || text.starts_with("UWP:") || (channel == "SYS" && (text.starts_with("Serial:") ||
+				text.starts_with("Title:") || text.starts_with("Category:") || text.starts_with("Version:")));
+			if (!keep || (channel == "PAT" && lv == logs::level::fatal))
+				return;
+			static constexpr const char* letters = "AFETSWNT";
+			std::string out = std::to_string(stamp / 1000000) + "." + std::to_string(stamp / 1000 % 1000 + 1000).substr(1) +
+				" " + letters[static_cast<unsigned>(lv) & 7] + " " + std::string(channel) + ": " + std::string(prefix) +
+				std::string(text.substr(0, 2000)) + "\n";
+			std::lock_guard lock(mutex);
+			if (lv == logs::level::fatal && !crash_marked)
+			{
+				crash_marked = true;
+				write_locked("===== CRASH REPORT (RPCS3) =====\n");
+			}
+			u32& n = repeats[std::string(channel) + std::string(text.substr(0, 120))];
+			if (++n > 20)
+				return;
+			write_locked(out);
+			if (n == 20)
+				write_locked("-------- Game Vault: the line above came 20 times; more copies are counted, not written --------\n");
+		}
+
+		void sync() override
+		{
+			std::lock_guard lock(mutex);
+			if (file)
+				file.sync();
+		}
+	} g_gv_report;
+
+	// once a minute while a game runs (ticks are 10 ms)
+	void gv_report_tick(u32 ticks)
+	{
+		static u64 s_frames = 0, s_cpu = 0, s_wall = 0;
+		static u32 s_minutes = 0;
+		if (ticks % 6000)
+			return;
+		const auto ft = [](const FILETIME& t) { return (u64{t.dwHighDateTime} << 32) | t.dwLowDateTime; };
+		FILETIME create, exit, kernel, user, now;
+		int cpu_pct = -1;
+		if (GetProcessTimes(GetCurrentProcess(), &create, &exit, &kernel, &user))
+		{
+			GetSystemTimeAsFileTime(&now);
+			const u64 cpu = ft(kernel) + ft(user), wall = ft(now);
+			SYSTEM_INFO info{};
+			GetNativeSystemInfo(&info);
+			if (s_wall && wall > s_wall)
+				cpu_pct = static_cast<int>(100.0 * (cpu - s_cpu) / (wall - s_wall) / std::max<DWORD>(1, info.dwNumberOfProcessors));
+			s_cpu = cpu;
+			s_wall = wall;
+		}
+		const u64 frames = g_gv_frames.load();
+		UINT64 limit = 0;
+		const UINT64 usage = get_app_memory_usage(&limit);
+		g_gv_report.line(fmt::format("Game Vault: frame rate %.1f, CPU %d%%, memory %u MB, memory limit %u MB",
+			(frames - s_frames) / 60.0, cpu_pct, static_cast<u32>(usage >> 20), static_cast<u32>(limit >> 20)));
+		g_gv_report.line(fmt::format("-------- Game Vault: RPCS3 running %u min --------", ++s_minutes));
+		s_frames = frames;
+	}
+
 	// While a game runs: logs app memory every second when it moved by 64 MB or more, else every 10 s.
 	// The console ends an app silently when it goes over its limit, so the log keeps the trend.
 	bool g_mem_watch = true; // an empty LocalState/no_mem_watch turns the poll off
@@ -759,6 +887,9 @@ namespace
 				g_fatal_text.clear();
 			}
 			g_state = shell_state::running;
+			// Game Vault's report tools read these two lines (the same words Xenia and Cemu write)
+			g_gv_report.line("Title name: " + Emu.GetTitle());
+			g_gv_report.line("Title ID: " + Emu.GetTitleID());
 			uwp_telemetry::on_game_started();
 			uwp_frontend::on_emulation_started();
 		};
@@ -982,6 +1113,8 @@ namespace
 			};
 			static fatal_listener s_fatal_listener;
 			logs::listener::add(&s_fatal_listener);
+			g_gv_report.open(g_local_dir);
+			logs::listener::add(&g_gv_report);
 
 			// Mesa's own messages (shader compiler, D3D12 failures) go to stderr; keep them in LocalState.
 			if (FILE* f = std::freopen((g_local_dir + "mesa.log").c_str(), "w", stderr))
@@ -1278,6 +1411,7 @@ namespace
 				if (g_state == shell_state::booting || g_state == shell_state::running)
 				{
 					watch_app_memory(ticks);
+					gv_report_tick(ticks);
 					start_background_precompile(ticks);
 					report_stall(ticks);
 				}
@@ -2265,6 +2399,7 @@ void uwp_present_frame(const void* bgra_pixels, u32 width, u32 height)
 	g_frame_width = width;
 	g_frame_height = height;
 	g_frame_serial++;
+	g_gv_frames++;
 }
 
 // Called by the emulator for unrecoverable errors.
