@@ -49,6 +49,9 @@ namespace uwp_frontend
 	// emulator's progress text (e.g. PPU modules compiling). Same canvas as frame().
 	bool loading_frame(const std::string& title, const std::string& detail, u32 done, u32 total, const u32*& pixels);
 
+	// Synchronous emulator-main callback: completes required disc packages before boot continues.
+	bool install_disc_packages(const std::vector<std::string>& paths, bool from_optical_drive);
+
 	// Emulator callbacks.
 	void on_emulation_started();
 	void on_emulation_stopped();
