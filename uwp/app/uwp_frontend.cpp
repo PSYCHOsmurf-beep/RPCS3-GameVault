@@ -1181,7 +1181,6 @@ namespace uwp_frontend
 		// Shared by manual installs and packages required during a disc boot. The caller owns
 		// the install-job lifetime; extraction runs on a named thread, never the XAML thread.
 		std::string install_packages(const std::vector<std::string>& paths, bool from_optical_drive, uwp_firmware::progress& prog)
-		try
 		{
 			std::deque<package_reader> readers;
 			u64 required = 64u << 20;
@@ -1228,12 +1227,6 @@ namespace uwp_frontend
 			prog.done = 1000;
 			return {};
 		}
-		catch (const std::exception& e)
-		{
-			ui_log.error("UI: package installer exception: %s", e.what());
-			return "Package installation failed unexpectedly. Details are in RPCS3.log.";
-		}
-
 
 		// ---- Package (.pkg) install ----
 		void start_package_install(const std::string& path, const std::string& title)
