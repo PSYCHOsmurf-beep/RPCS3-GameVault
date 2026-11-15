@@ -814,7 +814,7 @@ namespace
 		g_emu_callbacks.get_image_info = [](const std::string&, std::string&, s32&, s32&, s32&) { return false; };
 		g_emu_callbacks.get_scaled_image = [](const std::string&, s32, s32, s32&, s32&, u8*, bool) { return false; };
 		g_emu_callbacks.get_font_dirs = []() { return std::vector<std::string>{get_package_dir() + "fonts/"}; };
-		g_emu_callbacks.on_install_pkgs = [](const std::vector<std::string>&, bool) { return false; };
+		g_emu_callbacks.on_install_pkgs = uwp_frontend::install_disc_packages;
 		g_emu_callbacks.add_breakpoint = [](u32) {};
 		g_emu_callbacks.display_sleep_control_supported = []() { return false; };
 		g_emu_callbacks.enable_display_sleep = [](bool) {};
