@@ -75,6 +75,7 @@
 #include <unordered_map>
 // Game Vault: fsr=1 in the start link (uwp_xaml.cpp reads it, uwp_main.cpp applies it)
 extern std::atomic<bool> g_gv_link_fsr;
+extern std::atomic<int> g_gv_link_fsr_pct;   // fsrs=<percent>: Game Vault's FSR strength
 
 #include <d3d11_1.h>
 #include <dxgi1_2.h>
@@ -896,6 +897,12 @@ namespace
 				// after the game's own config was loaded at boot, so Game Vault's choice wins
 				g_cfg.video.output_scaling.set(output_scaling_mode::fsr);
 				g_gv_report.line("Game Vault: Sharper picture (FSR) on");
+				// the strength: RPCS3's RCAS sharpening is already in percent (0..100)
+				if (const int pct = g_gv_link_fsr_pct; pct > 0 && pct <= 100)
+				{
+					g_cfg.video.rcas_sharpening_intensity.set(pct);
+					g_gv_report.line(fmt::format("Game Vault: FSR strength %d%%", pct));
+				}
 			}
 			// Game Vault's report tools read these two lines (the same words Xenia and Cemu write)
 			g_gv_report.line("Title name: " + Emu.GetTitle());
@@ -2402,6 +2409,7 @@ void uwp_get_display_size(u32& width, u32& height)
 
 // Game Vault's "Sharper picture (FSR)" (fsr=1 in the start link, uwp_xaml.cpp): FSR output scaling while the game runs
 std::atomic<bool> g_gv_link_fsr{false};
+std::atomic<int> g_gv_link_fsr_pct{0};   // fsrs=<percent> with it: the strength
 
 void uwp_present_frame(const void* bgra_pixels, u32 width, u32 height)
 {
