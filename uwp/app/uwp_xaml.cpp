@@ -21,6 +21,8 @@
 #include <deque>
 #include <optional>
 #include <unordered_map>
+// Game Vault: fsr=1 in the start link (read here, applied in uwp_main.cpp)
+extern std::atomic<bool> g_gv_link_fsr;
 
 LOG_CHANNEL(xaml_log, "UWPXAML");
 
@@ -41,6 +43,7 @@ namespace uwp_xaml
 		using namespace winrt_abi;
 
 #include "uwp_xaml_pages.inc"
+
 
 		// {f92f19d2-3ade-45a6-a20c-f6f1ea90554b} (windows.ui.xaml.media.dxinterop.h)
 		struct ISwapChainPanelNative : IUnknown
@@ -1960,6 +1963,8 @@ namespace uwp_xaml
 					const std::string text = link_decode(link);
 					const std::string path = link_game_path(text);
 					xaml_log.notice("Game Vault link: %s -> '%s'", link, path);
+					// Game Vault's "Sharper picture (FSR)": applied when the game runs (uwp_main.cpp on_run)
+					g_gv_link_fsr = link_param(text, "fsr=") == "1";
 					uwp_frontend::boot_from_link(path, link_back(text), link_netcred(text));
 				}
 				return hr;

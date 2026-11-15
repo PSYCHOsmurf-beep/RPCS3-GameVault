@@ -67,11 +67,15 @@
 #include <cstdio>
 #include <deque>
 #include <functional>
+#include <atomic>
 #include <map>
 #include <mutex>
 #include <thread>
 #include <vector>
 #include <unordered_map>
+// Game Vault: fsr=1 in the start link (uwp_xaml.cpp reads it, uwp_main.cpp applies it)
+extern std::atomic<bool> g_gv_link_fsr;
+
 #include <d3d11_1.h>
 #include <dxgi1_2.h>
 
@@ -887,6 +891,12 @@ namespace
 				g_fatal_text.clear();
 			}
 			g_state = shell_state::running;
+			if (g_gv_link_fsr)
+			{
+				// after the game's own config was loaded at boot, so Game Vault's choice wins
+				g_cfg.video.output_scaling.set(output_scaling_mode::fsr);
+				g_gv_report.line("Game Vault: Sharper picture (FSR) on");
+			}
 			// Game Vault's report tools read these two lines (the same words Xenia and Cemu write)
 			g_gv_report.line("Title name: " + Emu.GetTitle());
 			g_gv_report.line("Title ID: " + Emu.GetTitleID());
@@ -2389,6 +2399,9 @@ void uwp_get_display_size(u32& width, u32& height)
 	width = c_display_width;
 	height = c_display_height;
 }
+
+// Game Vault's "Sharper picture (FSR)" (fsr=1 in the start link, uwp_xaml.cpp): FSR output scaling while the game runs
+std::atomic<bool> g_gv_link_fsr{false};
 
 void uwp_present_frame(const void* bgra_pixels, u32 width, u32 height)
 {
