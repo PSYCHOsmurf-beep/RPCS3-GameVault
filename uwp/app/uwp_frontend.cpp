@@ -53,6 +53,7 @@
 #include <chrono>
 #include <cmath>
 #include <map>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -1161,10 +1162,10 @@ namespace uwp_frontend
 			const std::string name = path.substr(path.rfind('/') + 1);
 			const std::string exdata = rpcs3::utils::get_hdd0_dir() + "home/" + Emu.GetUsr() + "/exdata/";
 			fs::file from(path);
-			if (!from || from.size() < 0x10)
+			if (!from || from.size() != 0x10)
 			{
 				ui_log.error("UI: can't read license %s (%s)", path, fs::g_tls_error);
-				return "The license file couldn't be read.";
+				return "A RAP license must be a readable, exactly 16-byte file. Text keys and compressed archives are not RAP files.";
 			}
 			fs::create_path(exdata);
 			const std::string to = exdata + name.substr(0, name.find_last_of('.')) + ".rap";
@@ -1176,6 +1177,63 @@ namespace uwp_frontend
 			ui_log.success("UI: installed license %s", to);
 			return {};
 		}
+
+		// Shared by manual installs and packages required during a disc boot. The caller owns
+		// the install-job lifetime; extraction runs on a named thread, never the XAML thread.
+		std::string install_packages(const std::vector<std::string>& paths, bool from_optical_drive, uwp_firmware::progress& prog)
+		try
+		{
+			std::deque<package_reader> readers;
+			u64 required = 64u << 20;
+			for (const auto& path : paths)
+			{
+				readers.emplace_back(path);
+				fs::stat_t pkg{};
+				if (!readers.back().is_valid() || !fs::get_stat(path, pkg))
+					return "A package is unreadable, damaged or not a PS3 package: " + path;
+				if (pkg.size > std::numeric_limits<u64>::max() - required)
+					return "The package sizes are invalid.";
+				required += pkg.size;
+			}
+			if (readers.empty())
+				return {};
+
+			fs::device_stat hdd{};
+			if (!fs::statfs(rpcs3::utils::get_hdd0_dir(), hdd))
+				return "The destination drive couldn't be checked. Reconnect it and try again.";
+			if (hdd.avail_free < required)
+				return fmt::format("Not enough space: the packages need about %u MB including a safety margin, but only %u MB are free.",
+					required >> 20, hdd.avail_free >> 20);
+
+			package_install_result result{};
+			std::deque<std::string> bootables;
+			named_thread worker("PKG Installer", [&]()
+			{
+				result = package_reader::extract_data(readers, bootables, from_optical_drive);
+			});
+			while (worker <= thread_state::aborting)
+			{
+				u64 done = 0;
+				for (const auto& reader : readers)
+					done += std::max(0, reader.get_progress(1000));
+				prog.done = static_cast<u32>(done / readers.size());
+				std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			}
+			worker();
+			if (result.error == package_install_result::error_type::app_version)
+				return fmt::format("This update requires game version %s, but version %s is installed. Install the game or the earlier updates first.",
+					result.version.expected, result.version.installed.empty() ? "(none)" : result.version.installed);
+			if (result.error != package_install_result::error_type::no_error)
+				return "The packages couldn't be installed. Details are in RPCS3.log.";
+			prog.done = 1000;
+			return {};
+		}
+		catch (const std::exception& e)
+		{
+			ui_log.error("UI: package installer exception: %s", e.what());
+			return "Package installation failed unexpectedly. Details are in RPCS3.log.";
+		}
+
 
 		// ---- Package (.pkg) install ----
 		void start_package_install(const std::string& path, const std::string& title)
@@ -1197,57 +1255,23 @@ namespace uwp_frontend
 
 			std::thread([path, title, prog = g_job.get()]()
 			{
-				std::string error;
-				std::deque<package_reader> readers;
-				readers.emplace_back(path);
-
-				// A full drive is a fatal file::write error in the installer thread, which closes the
-				// app; check the space first. The installed files take about as much as the package.
-				fs::stat_t pkg{};
-				fs::device_stat hdd{};
-				const bool known_free = fs::get_stat(path, pkg) && fs::statfs(rpcs3::utils::get_hdd0_dir(), hdd);
-				const u64 pkg_size = pkg.size;
-
-				if (!readers[0].is_valid())
-				{
-					error = "The package is damaged or not a PS3 package.";
-				}
-				else if (known_free && hdd.avail_free < pkg_size + (64u << 20))
-				{
-					error = fmt::format("The USB drive is full: the package needs about %u MB, but only %u MB are free. Free some space and try again.",
-						(pkg_size >> 20) + 64, hdd.avail_free >> 20);
-				}
-				else
-				{
-					package_install_result result{};
-					std::deque<std::string> bootables;
-					named_thread worker("PKG Installer", [&]()
-					{
-						result = package_reader::extract_data(readers, bootables, false);
-					});
-					while (worker <= thread_state::aborting)
-					{
-						prog->done = static_cast<u32>(readers[0].get_progress(1000));
-						std::this_thread::sleep_for(std::chrono::milliseconds(50));
-					}
-					worker();
-
-					if (result.error == package_install_result::error_type::app_version)
-						error = fmt::format("This update is for version %s of the game, but version %s is installed. Install the game or the earlier updates first.",
-							result.version.expected, result.version.installed.empty() ? "(none)" : result.version.installed);
-					else if (result.error != package_install_result::error_type::no_error)
-						error = "The package couldn't be installed.";
-				}
+				const std::string error = install_packages({path}, false, *prog);
 
 				// Licenses that sit next to the package (common for PSN packages on USB drives).
 				u32 licenses = 0;
+				u32 failed_licenses = 0;
 				if (error.empty())
 				{
 					const std::string dir = path.substr(0, path.rfind('/') + 1);
 					for (const auto& e : fs::dir(dir))
 					{
-						if (!e.is_directory && upper_ext(e.name) == ".RAP" && install_license(dir + e.name).empty())
-							licenses++;
+						if (!e.is_directory && upper_ext(e.name) == ".RAP")
+						{
+							if (install_license(dir + e.name).empty())
+								licenses++;
+							else
+								failed_licenses++;
+						}
 					}
 				}
 
@@ -1255,10 +1279,11 @@ namespace uwp_frontend
 				if (error.empty())
 				{
 					ui_log.success("UI: installed package %s", path);
-					set_status(fmt::format("Installed %s", title), col_ok);
-					post_modal("Package installed", licenses
-						? fmt::format("%s is installed, with %u license file(s) from the same folder. Installed games are on the Games tab.", title, licenses)
-						: fmt::format("%s is installed. Installed games are on the Games tab.", title));
+					set_status(fmt::format("Installed %s", title), failed_licenses ? col_warn : col_ok);
+					std::string message = fmt::format("%s is installed, with %u license file(s) from the same folder. Updates and DLC apply to their matching game; standalone games appear on the Games tab.", title, licenses);
+					if (failed_licenses)
+						fmt::append(message, "\n\nWarning: %u license file(s) could not be installed. The content may remain locked. Check the RAP files and install them again.", failed_licenses);
+					post_modal(failed_licenses ? "Package installed; license warning" : "Package installed", message);
 				}
 				else
 				{
@@ -2971,6 +2996,30 @@ namespace uwp_frontend
 				g_host.run_on_main([pup]() { start_firmware_install(pup); });
 			}).detach();
 		}
+	}
+
+	bool install_disc_packages(const std::vector<std::string>& paths, bool from_optical_drive)
+	{
+		if (paths.empty())
+			return true;
+		if (!g_host.no_storage.empty() || g_installing.exchange(true))
+		{
+			ui_log.error("UI: required disc packages cannot be installed: storage unavailable or another install is active");
+			return false;
+		}
+		g_job = std::make_unique<uwp_firmware::progress>();
+		g_job->total = 1000;
+		g_job_title = "Installing required game data";
+		const std::string error = install_packages(paths, from_optical_drive, *g_job);
+		g_installing = false;
+		if (!error.empty())
+		{
+			ui_log.error("UI: required disc packages failed: %s", error);
+			post_modal("Required game data installation failed", error);
+			return false;
+		}
+		ui_log.success("UI: installed %u required disc package(s)", paths.size());
+		return true;
 	}
 
 	void init(const host_info& host)
