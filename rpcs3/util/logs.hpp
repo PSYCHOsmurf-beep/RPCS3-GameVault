@@ -193,7 +193,7 @@ namespace logs
 	}
 
 	// Called in main()
-	std::unique_ptr<logs::listener> make_file_listener(const std::string& path, u64 max_size);
+	std::unique_ptr<logs::listener> make_file_listener(const std::string& path, u64 max_size, u64 severe_reserve = 0);
 
 	// Called in main()
 	void set_init(std::initializer_list<stored_message>);
