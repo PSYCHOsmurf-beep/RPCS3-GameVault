@@ -1470,7 +1470,13 @@ namespace vk
 			}
 
 			cmd.submit(submit_info, VK_TRUE);
-			vk::wait_for_fence(&submit_fence, GENERAL_WAIT_TIMEOUT, 2);
+			const auto wait_result = vk::wait_for_fence(&submit_fence, GENERAL_WAIT_TIMEOUT, 2);
+			if (wait_result != VK_SUCCESS)
+			{
+				vk::die_with_error(wait_result);
+				// Device recovery can return; do not recycle work still in flight.
+				fmt::throw_exception("Texture readback fence did not complete (%d)", static_cast<s32>(wait_result));
+			}
 
 			cmd.reset();
 			cmd.begin();
