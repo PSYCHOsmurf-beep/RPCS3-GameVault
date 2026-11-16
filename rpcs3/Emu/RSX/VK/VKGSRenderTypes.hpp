@@ -161,7 +161,7 @@ namespace vk
 				return VK_SUCCESS;
 			}
 
-			const auto ret = vk::wait_for_fence(m_submit_fence, timeout);
+			const auto ret = vk::wait_for_fence(m_submit_fence, timeout, 1);
 			switch (ret)
 			{
 			case VK_SUCCESS:
