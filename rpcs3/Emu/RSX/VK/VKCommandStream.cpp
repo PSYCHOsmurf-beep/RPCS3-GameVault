@@ -53,14 +53,19 @@ namespace vk
 			.pSignalSemaphores = submit_info.signal_semaphores.data()
 		};
 
-		vkQueueSubmit(submit_info.queue, 1, &info, submit_info.pfence->handle);
+		const auto submit_result = vkQueueSubmit(submit_info.queue, 1, &info, submit_info.pfence->handle);
 		release_global_submit_lock();
 #ifdef RPCS3_UWP
 		g_uwp_submit_us += get_system_time() - uwp_start;
 #endif
 
-		// Signal fence
+		// Release CPU-side flush waiters even if the driver rejected the submission.
 		submit_info.pfence->signal_flushed();
+		if (submit_result != VK_SUCCESS)
+		{
+			vk::die_with_error(submit_result);
+			fmt::throw_exception("Vulkan queue submission failed (%d)", static_cast<s32>(submit_result));
+		}
 	}
 
 	void queue_submit(const queue_submit_t& submit_info, VkBool32 flush)
