@@ -1470,7 +1470,7 @@ namespace vk
 			}
 
 			cmd.submit(submit_info, VK_TRUE);
-			vk::wait_for_fence(&submit_fence, GENERAL_WAIT_TIMEOUT);
+			vk::wait_for_fence(&submit_fence, GENERAL_WAIT_TIMEOUT, 2);
 
 			cmd.reset();
 			cmd.begin();
