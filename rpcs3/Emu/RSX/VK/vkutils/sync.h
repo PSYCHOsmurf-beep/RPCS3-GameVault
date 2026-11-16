@@ -163,6 +163,7 @@ namespace vk
 		~debug_marker_scope();
 	};
 
-	VkResult wait_for_fence(fence* pFence, u64 timeout = 0ull);
+	// site: 0 = other, 1 = command_buffer_chunk::wait (VKGSRenderTypes.hpp), 2 = texture readback (VKTextureCache.cpp). Used only by the UWP wait statistics.
+	VkResult wait_for_fence(fence* pFence, u64 timeout = 0ull, u32 site = 0);
 	VkResult wait_for_event(event* pEvent, u64 timeout = 0ull);
 }
