@@ -951,7 +951,9 @@ namespace
 				if (game)
 					fs::copy_file(g_android_config_dir + "RPCS3.prev.log", g_android_config_dir + "RPCS3.game.log", true);
 			}
-			static std::unique_ptr<logs::listener> log_file = logs::make_file_listener(g_android_config_dir + "RPCS3.log", 256 * 1024 * 1024);
+			static std::unique_ptr<logs::listener> log_file = logs::make_file_listener(g_android_config_dir + "RPCS3.log", 256 * 1024 * 1024, 16 * 1024 * 1024);
+			// Keep the final 16 MB for warnings/errors after ordinary traffic reaches 240 MB.
+			// Admission is per complete record, with no additional writer buffer or lossy deduplication.
 			// Hands the lines logged so far to the file and stops the logger keeping a copy of every
 			// line in memory, which it does until set_init (desktop RPCS3 calls it in main). Without
 			// it the app's memory grew by every log line ever written: 1.3 -> 4.2 GB in 2 minutes of
