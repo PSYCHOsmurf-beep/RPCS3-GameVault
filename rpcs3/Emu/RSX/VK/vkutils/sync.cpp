@@ -564,6 +564,10 @@ namespace vk
 #ifdef RPCS3_UWP
 	// CPU time spent waiting for the GPU (Xbox slow-frame log in RSXThread.cpp).
 	atomic_t<u64> g_uwp_fence_wait_us{0}, g_uwp_fence_waits{0};
+	// Per call site (see wait_for_fence 'site'): time spent waiting for the submit thread to flush the fence
+	// versus time inside vkWaitForFences/vkGetFenceStatus, and the number of waits.
+	atomic_t<u64> g_uwp_fence_site_flush_us[3]{}, g_uwp_fence_site_drv_us[3]{}, g_uwp_fence_site_n[3]{};
+	atomic_t<u64> g_uwp_fence_site_max_us[3]{}; // longest single driver wait since the last frame snapshot
 
 	struct uwp_fence_wait_timer
 	{
@@ -573,12 +577,32 @@ namespace vk
 	};
 #endif
 
-	VkResult wait_for_fence(fence* pFence, u64 timeout)
+	VkResult wait_for_fence(fence* pFence, u64 timeout, u32 site)
 	{
 #ifdef RPCS3_UWP
-		uwp_fence_wait_timer uwp_timer;
+		uwp_fence_wait_timer uwp_timer; // total, unchanged meaning: flush wait + driver wait
+		const u32 uwp_site = site < 3 ? site : 0;
+		const u64 uwp_flush_start = get_system_time();
 #endif
 		pFence->wait_flush();
+#ifdef RPCS3_UWP
+		g_uwp_fence_site_flush_us[uwp_site] += get_system_time() - uwp_flush_start;
+		struct uwp_drv_timer
+		{
+			u32 s;
+			u64 start = get_system_time();
+			~uwp_drv_timer()
+			{
+				const u64 dt = get_system_time() - start;
+				g_uwp_fence_site_drv_us[s] += dt;
+				g_uwp_fence_site_n[s]++;
+				g_uwp_fence_site_max_us[s].atomic_op([dt](u64& value)
+				{
+					value = std::max(value, dt);
+				});
+			}
+		} uwp_drv{uwp_site};
+#endif
 
 		if (timeout)
 		{
