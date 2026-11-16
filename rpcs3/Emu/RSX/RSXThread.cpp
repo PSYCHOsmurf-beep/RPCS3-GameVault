@@ -67,6 +67,7 @@ extern thread_local std::string(*g_tls_log_prefix)();
 namespace vk
 {
 	extern atomic_t<u64> g_uwp_fence_wait_us, g_uwp_fence_waits; // VK/vkutils/sync.cpp
+	extern atomic_t<u64> g_uwp_fence_site_flush_us[3], g_uwp_fence_site_drv_us[3], g_uwp_fence_site_n[3], g_uwp_fence_site_max_us[3]; // VK/vkutils/sync.cpp
 	extern atomic_t<u64> g_uwp_pipelines_created; // VK/VKPipelineCompiler.cpp
 	extern atomic_t<u64> g_uwp_submit_us, g_uwp_present_wait_us, g_uwp_present_copy_us; // VK/VKCommandStream.cpp
 }
@@ -2450,6 +2451,21 @@ namespace rsx
 			const u64 pipelines = vk::g_uwp_pipelines_created;
 			const u64 submit_us = vk::g_uwp_submit_us, pwait_us = vk::g_uwp_present_wait_us, pcopy_us = vk::g_uwp_present_copy_us;
 			static uwp_fifo_counters s_last_fifo;
+			static u64 s_last_site_flush[3]{}, s_last_site_drv[3]{}, s_last_site_n[3]{};
+			u64 site_flush[3], site_drv[3], site_n[3], site_max[3];
+			for (u32 i = 0; i < 3; i++)
+				site_flush[i] = vk::g_uwp_fence_site_flush_us[i], site_drv[i] = vk::g_uwp_fence_site_drv_us[i], site_n[i] = vk::g_uwp_fence_site_n[i], site_max[i] = vk::g_uwp_fence_site_max_us[i].exchange(0);
+			if (uwp_new_run)
+			{
+				// Baselines are function-static: without this, the first frame of a new boot reports
+				// everything the previous game accumulated (e.g. 126249 ms / 769 waits).
+				s_last_flip = 0;
+				s_last_idle = idle, s_last_gpu_wait = gpu_wait, s_last_gpu_waits = gpu_waits;
+				s_last_pipelines = pipelines, s_last_submit = submit_us, s_last_pwait = pwait_us, s_last_pcopy = pcopy_us;
+				s_last_fifo = g_uwp_fifo;
+				for (u32 i = 0; i < 3; i++)
+					s_last_site_flush[i] = site_flush[i], s_last_site_drv[i] = site_drv[i], s_last_site_n[i] = site_n[i];
+			}
 			const uwp_fifo_counters& fc = g_uwp_fifo;
 			if (s_last_flip && (now - s_last_flip >= 250'000 || uwp_hitch))
 			{
@@ -2465,7 +2481,13 @@ namespace rsx
 					now - s_last_flip >= 250'000 ? "slow frame" : "hitch frame", (now - s_last_flip) / 1000., pipelines - s_last_pipelines, (submit_us - s_last_submit) / 1000., (pwait_us - s_last_pwait) / 1000., (pcopy_us - s_last_pcopy) / 1000., (idle >= s_last_idle ? idle - s_last_idle : idle) / 1000., (gpu_wait - s_last_gpu_wait) / 1000., gpu_waits - s_last_gpu_waits,
 					st.draw_calls, st.submit_count, st.setup_time / 1000., st.vertex_upload_time / 1000., st.textures_upload_time / 1000., st.draw_exec_time / 1000.,
 					st.program_cache_lookups_ellided, st.program_cache_lookups_total);
+				rsx_log.notice("UWP fence sites (flush wait / driver wait / waits / longest driver wait ms): chunk %.1f/%.1f/%llu/%.1f | readback %.1f/%.1f/%llu/%.1f | other %.1f/%.1f/%llu/%.1f",
+					(site_flush[1] - s_last_site_flush[1]) / 1000., (site_drv[1] - s_last_site_drv[1]) / 1000., site_n[1] - s_last_site_n[1], site_max[1] / 1000.,
+					(site_flush[2] - s_last_site_flush[2]) / 1000., (site_drv[2] - s_last_site_drv[2]) / 1000., site_n[2] - s_last_site_n[2], site_max[2] / 1000.,
+					(site_flush[0] - s_last_site_flush[0]) / 1000., (site_drv[0] - s_last_site_drv[0]) / 1000., site_n[0] - s_last_site_n[0], site_max[0] / 1000.);
 			}
+			for (u32 i = 0; i < 3; i++)
+				s_last_site_flush[i] = site_flush[i], s_last_site_drv[i] = site_drv[i], s_last_site_n[i] = site_n[i];
 			// Telemetry: frames of 100 ms or more and 2.5x the average (longer than 30 s is a pause), the longest 5 per window.
 			if (g_uwp_perf_sink && uwp_avg_us && uwp_frame_us >= 100'000 && uwp_frame_us * 2 >= uwp_avg_us * 5 && uwp_frame_us < 30'000'000)
 			{
