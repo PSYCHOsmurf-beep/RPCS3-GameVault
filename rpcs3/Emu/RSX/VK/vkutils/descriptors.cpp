@@ -260,6 +260,10 @@ namespace vk
 
 	void descriptor_pool::next_subpool()
 	{
+		// Cached sets belong to the old pool, which may be reset by GC.
+		// Never hand them out after switching to another subpool.
+		m_descriptor_set_cache.clear();
+
 		if (m_current_subpool_index != umax)
 		{
 			// Enqueue release using gc
