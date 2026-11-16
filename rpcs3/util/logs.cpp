@@ -1,4 +1,5 @@
 #include "util/logs.hpp"
+#include "util/log_budget.hpp"
 #include "Utilities/File.h"
 #include "Utilities/mutex.h"
 #include "Utilities/Thread.h"
@@ -114,7 +115,10 @@ namespace logs
 
 	struct file_listener final : file_writer, public listener
 	{
-		file_listener(const std::string& path, u64 max_size);
+		const bool m_preserve_severe;
+		log_budget m_budget;
+
+		file_listener(const std::string& path, u64 max_size, u64 severe_reserve);
 
 		~file_listener() override = default;
 
@@ -795,9 +799,11 @@ void logs::file_writer::close_prematurely()
 	}
 }
 
-logs::file_listener::file_listener(const std::string& path, u64 max_size)
+logs::file_listener::file_listener(const std::string& path, u64 max_size, u64 severe_reserve)
 	: file_writer(path, max_size)
 	, listener()
+	, m_preserve_severe(severe_reserve != 0)
+	, m_budget(max_size, severe_reserve, 3)
 {
 	// Write UTF-8 BOM
 	file_writer::log("\xEF\xBB\xBF", 3);
@@ -865,12 +871,15 @@ void logs::file_listener::log(u64 stamp, const logs::message& msg, std::string_v
 	text += _text;
 	text += '\n';
 
+	if (m_preserve_severe && !m_budget.reserve_line(text.size(), static_cast<level>(msg) <= level::warning))
+		return;
+
 	file_writer::log(text.data(), text.size());
 }
 
-std::unique_ptr<logs::listener> logs::make_file_listener(const std::string& path, u64 max_size)
+std::unique_ptr<logs::listener> logs::make_file_listener(const std::string& path, u64 max_size, u64 severe_reserve)
 {
-	std::unique_ptr<logs::listener> result = std::make_unique<logs::file_listener>(path, max_size);
+	std::unique_ptr<logs::listener> result = std::make_unique<logs::file_listener>(path, max_size, severe_reserve);
 
 	// Register file listener
 	result->add(result.get());
