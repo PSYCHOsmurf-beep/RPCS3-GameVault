@@ -28,6 +28,10 @@
 #include "Emu/cache_utils.hpp"
 #include <vulkan/vulkan_core.h>
 
+#ifdef RPCS3_UWP
+u32 g_uwp_command_buffer_count = 64; // LocalState/command_buffers: 512 restores the previous ring size.
+#endif
+
 namespace vk
 {
 	VkCompareOp get_compare_func(rsx::comparison_function op, bool reverse_direction = false);
@@ -349,6 +353,11 @@ namespace vk
 			case rsx::logic_op::logic_clear:
 				for (uint index = 0; index < num_draw_buffers; ++index)
 					properties.state.enable_blend(index, VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD, VK_BLEND_OP_ADD);
+				break;
+			case rsx::logic_op::logic_invert:
+				// The fragment shader writes 1.0 (UWP_LOGIC_INVERT_BIT), so src * (1 - dst) = 1 - dst = ~dst
+				for (uint index = 0; index < num_draw_buffers; ++index)
+					properties.state.enable_blend(index, VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR, VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA, VK_BLEND_FACTOR_ZERO, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD, VK_BLEND_OP_ADD);
 				break;
 			default:
 				if (static atomic_t<bool> s_logged = false; !s_logged.exchange(true))
