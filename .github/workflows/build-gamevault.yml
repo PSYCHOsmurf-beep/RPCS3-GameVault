@@ -37,6 +37,9 @@ jobs:
           pip install --break-system-packages ziglang==0.17.1 "meson>=1.4,<2"
           python3 -m ziglang version
 
+      - name: Compile generated INVERT fragment shaders
+        run: python3 uwp/tests/check-invert-shaders.py
+
       - name: LLVM cache key
         id: llvmkey
         run: echo "sha=$(git -C 3rdparty/llvm/llvm rev-parse HEAD)-$(sha256sum uwp/toolchain/build-llvm.sh uwp/toolchain/toolchain-uwp.cmake uwp/toolchain/zig-cc uwp/toolchain/zig-c++ | sha256sum | cut -c1-16)" >> $GITHUB_OUTPUT
