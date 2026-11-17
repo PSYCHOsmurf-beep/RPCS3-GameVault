@@ -24,6 +24,10 @@
 
 #define VK_MAX_ASYNC_CB_COUNT 512
 
+#ifdef RPCS3_UWP
+extern u32 g_uwp_command_buffer_count;
+#endif
+
 #define FRAME_PRESENT_TIMEOUT 10000000ull // 10 seconds
 #define GENERAL_WAIT_TIMEOUT  2000000ull  // 2 seconds
 
@@ -349,46 +353,52 @@ namespace vk
 	{
 		atomic_t<u32> m_current_index = 0;
 		std::array<vk::command_buffer_chunk, Count> m_cb_list;
+		u32 m_active_count = Count;
 
 	public:
 		command_buffer_chain() = default;
 
 		void create(command_pool& pool, vk::command_buffer::access_type_hint access)
 		{
-			for (auto& cb : m_cb_list)
+#ifdef RPCS3_UWP
+			// Dozen retains descriptor heaps per command buffer after reset. Limit the
+			// number of independent retained heap caches, without removing fence waits.
+			m_active_count = std::min<u32>(Count, std::clamp<u32>(g_uwp_command_buffer_count, 8, VK_MAX_ASYNC_CB_COUNT));
+#endif
+			for (u32 i = 0; i < m_active_count; ++i)
 			{
-				cb.create(pool);
-				cb.access_hint = access;
+				m_cb_list[i].create(pool);
+				m_cb_list[i].access_hint = access;
 			}
 		}
 
 		void destroy()
 		{
-			for (auto& cb : m_cb_list)
+			for (u32 i = 0; i < m_active_count; ++i)
 			{
-				cb.destroy();
+				m_cb_list[i].destroy();
 			}
 		}
 
 		void poke_all()
 		{
-			for (auto& cb : m_cb_list)
+			for (u32 i = 0; i < m_active_count; ++i)
 			{
-				cb.poke();
+				m_cb_list[i].poke();
 			}
 		}
 
 		void wait_all()
 		{
-			for (auto& cb : m_cb_list)
+			for (u32 i = 0; i < m_active_count; ++i)
 			{
-				cb.wait();
+				m_cb_list[i].wait();
 			}
 		}
 
 		inline command_buffer_chunk* next()
 		{
-			const auto result_id = ++m_current_index % Count;
+			const auto result_id = ++m_current_index % m_active_count;
 			auto result = &m_cb_list[result_id];
 
 			if (!result->poke())
@@ -401,16 +411,16 @@ namespace vk
 
 		inline command_buffer_chunk* get()
 		{
-			return &m_cb_list[m_current_index % Count];
+			return &m_cb_list[m_current_index % m_active_count];
 		}
 
 #ifdef RPCS3_UWP
 		// Reset every finished command buffer except the current one (see command_buffer_chunk::trim)
 		void trim()
 		{
-			const u32 current = m_current_index % Count;
+			const u32 current = m_current_index % m_active_count;
 
-			for (u32 i = 0; i < Count; i++)
+			for (u32 i = 0; i < m_active_count; i++)
 			{
 				if (i != current)
 				{
