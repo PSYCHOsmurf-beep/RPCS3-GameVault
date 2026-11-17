@@ -117,6 +117,7 @@ extern std::string g_android_cache_dir;
 extern void ppu_precompile(std::vector<std::string>& dir_queue, std::vector<ppu_module<lv2_obj>*>* loaded_modules, bool is_fast_compilation);
 extern thread_local bool g_ppu_precompile_prx_only;
 
+extern u32 g_uwp_command_buffer_count; // VKGSRender.cpp
 extern u32 g_uwp_desc_pool_max; // VKProgramPipeline.cpp
 extern bool g_uwp_deferred_shader_compile; // VKProgramPipeline.cpp
 extern u32 g_uwp_pipeline_limit; // VKPresent.cpp
@@ -1178,6 +1179,14 @@ namespace
 				g_cfg.video.vk.vram_allocation_limit.set(vram_mb);
 				sys_log.always()("UWP: VRAM allocation limit: %u MB", vram_mb);
 			}
+			// Bound Dozen's per-command-buffer retained descriptor heap caches. Keep 512 available for A/B.
+			if (fs::file f{g_local_dir + "command_buffers"})
+			{
+				const u32 count = static_cast<u32>(std::strtoul(f.to_string().c_str(), nullptr, 10));
+				if (count >= 8 && count <= 512)
+					g_uwp_command_buffer_count = count;
+			}
+			sys_log.always()("UWP: active command buffers per ring: %u (512 restores the previous size)", g_uwp_command_buffer_count);
 			// Largest descriptor subpool per shader program (RPCS3 default 4096 sets); test switch.
 			if (fs::file f{g_local_dir + "desc_pool_max"})
 			{
