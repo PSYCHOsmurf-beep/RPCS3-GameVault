@@ -559,7 +559,12 @@ void VKFragmentDecompilerThread::insertMainEnd(std::stringstream & OS)
 		RSX_SHADER_CONTROL_PROGRAMMABLE_BLENDING |
 		RSX_SHADER_CONTROL_EMULATE_DEPTH_RANGE;
 
-	if (m_prog.ctrl & ROP_control_access_options)
+	if ((m_prog.ctrl & ROP_control_access_options)
+#ifdef RPCS3_UWP
+		// The UWP INVERT epilogue reads rop_control for every color-output shader.
+		|| m_prog.mrt_buffers_count > 0
+#endif
+		)
 	{
 		OS << "	const uint rop_control = fs_contexts[_fs_context_offset].rop_control;\n";
 
