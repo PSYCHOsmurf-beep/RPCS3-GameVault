@@ -962,7 +962,21 @@ namespace
 		g_emu_callbacks.get_image_info = [](const std::string&, std::string&, s32&, s32&, s32&) { return false; };
 		g_emu_callbacks.get_scaled_image = [](const std::string&, s32, s32, s32&, s32&, u8*, bool) { return false; };
 		g_emu_callbacks.get_font_dirs = []() { return std::vector<std::string>{get_package_dir() + "fonts/"}; };
-		g_emu_callbacks.on_install_pkgs = [](const std::vector<std::string>&, bool) { return false; };
+		// Discs that carry packages (PS3_GAME/INSDIR, PKGDIR, PS3_EXTRA: MLB 14 and 16, games with an update on the
+		// disc) install them at first start, as on a PS3 and in desktop RPCS3. This used to say no, so such a disc
+		// stopped with "Game install failed" and RPCS3 fell back to its menu (nwostar 11-15).
+		g_emu_callbacks.on_install_pkgs = [](const std::vector<std::string>& pkgs, bool from_optical_drive)
+		{
+			for (const std::string& pkg : pkgs)
+			{
+				if (!rpcs3::utils::install_pkg(pkg, from_optical_drive))
+				{
+					sys_log.error("UWP: could not install %s", pkg);
+					return false;
+				}
+			}
+			return true;
+		};
 		g_emu_callbacks.add_breakpoint = [](u32) {};
 		g_emu_callbacks.display_sleep_control_supported = []() { return false; };
 		g_emu_callbacks.enable_display_sleep = [](bool) {};
