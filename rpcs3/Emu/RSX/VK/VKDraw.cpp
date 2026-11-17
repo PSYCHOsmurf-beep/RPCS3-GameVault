@@ -1391,11 +1391,18 @@ void VKGSRender::gv_log_draw_state()
 
 bool VKGSRender::end_draw()
 {
+#ifdef RPCS3_UWP
+	++m_ctx->stats.uwp_pipeline_draw_attempts;
+#endif
 	// Groups changed since the last executed draw. Loading an interpreter program adds both programs.
 	m_interpreter_state = m_ctx->draw_state.dirty;
 
 	if (!load_program())
 	{
+#ifdef RPCS3_UWP
+		// Count the actual early return, not cache-hint elisions. No rendering policy change.
+		++m_ctx->stats.uwp_pipeline_unavailable_draws;
+#endif
 		// Program is not ready, skip drawing this
 		std::this_thread::yield();
 		// res()->surface_cache.on_write(); - breaks games for obvious reasons

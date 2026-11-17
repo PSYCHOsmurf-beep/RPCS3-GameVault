@@ -64,6 +64,12 @@ namespace rsx
 		u32 program_cache_lookups_total;
 		u32 program_cache_lookups_ellided;
 
+#ifdef RPCS3_UWP
+		// Draw batches reaching Vulkan, independent of the optional debug overlay.
+		u32 uwp_pipeline_draw_attempts;
+		u32 uwp_pipeline_unavailable_draws;
+#endif
+
 		framebuffer_statistics_t framebuffer_stats;
 	};
 

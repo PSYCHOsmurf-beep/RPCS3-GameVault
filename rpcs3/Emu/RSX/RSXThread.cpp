@@ -2,6 +2,7 @@
 #include "RSXThread.h"
 
 #ifdef RPCS3_UWP
+#include "Core/UWPPipelineReadiness.h"
 // Game Vault: conditional rendering test switch and counters (set and printed by VKDraw.cpp's draw-state log)
 bool g_gv_nocondrender = false;
 atomic_t<u32> g_gv_cond_skipped{0}, g_gv_cond_gpu{0}, g_gv_cond_zero{0}, g_gv_cond_nonzero{0};
@@ -2446,6 +2447,13 @@ namespace rsx
 		{
 			static u64 s_last_flip = 0, s_last_idle = 0, s_last_gpu_wait = 0, s_last_gpu_waits = 0;
 			const u64 now = get_system_time(), idle = performance_counters.idle_time;
+			static uwp_pipeline_readiness_window s_pipeline_readiness;
+			if (const auto sample = s_pipeline_readiness.record(now, s_uwp_run,
+				ctx->stats.uwp_pipeline_draw_attempts, ctx->stats.uwp_pipeline_unavailable_draws))
+			{
+				rsx_log.notice("UWP pipeline readiness: %llu/%llu draw batches skipped (pipeline unavailable) over %.1f ms",
+					sample->unavailable_batches, sample->attempted_batches, sample->interval_us / 1000.);
+			}
 			const u64 gpu_wait = vk::g_uwp_fence_wait_us, gpu_waits = vk::g_uwp_fence_waits;
 			static u64 s_last_pipelines = 0, s_last_submit = 0, s_last_pwait = 0, s_last_pcopy = 0;
 			const u64 pipelines = vk::g_uwp_pipelines_created;
@@ -2477,7 +2485,7 @@ namespace rsx
 			if (s_last_flip && (now - s_last_flip >= 250'000 || uwp_hitch))
 			{
 				const auto& st = ctx->stats;
-				rsx_log.notice("UWP %s: %.0f ms, %llu new pipelines, submit %.1f ms, present wait %.1f ms, present copy %.1f ms, RSX idle %.0f ms, GPU wait %.0f ms (%llu waits) | %u draws, %u submits | setup %.1f, vertex upload %.1f, texture upload %.1f, draw %.1f ms | %u/%u program lookups skipped",
+				rsx_log.notice("UWP %s: %.0f ms, %llu new pipelines, submit %.1f ms, present wait %.1f ms, present copy %.1f ms, RSX idle %.0f ms, GPU wait %.0f ms (%llu waits) | %u draws, %u submits | setup %.1f, vertex upload %.1f, texture upload %.1f, draw %.1f ms | %u/%u debug-only cache-hint lookups elided",
 					now - s_last_flip >= 250'000 ? "slow frame" : "hitch frame", (now - s_last_flip) / 1000., pipelines - s_last_pipelines, (submit_us - s_last_submit) / 1000., (pwait_us - s_last_pwait) / 1000., (pcopy_us - s_last_pcopy) / 1000., (idle >= s_last_idle ? idle - s_last_idle : idle) / 1000., (gpu_wait - s_last_gpu_wait) / 1000., gpu_waits - s_last_gpu_waits,
 					st.draw_calls, st.submit_count, st.setup_time / 1000., st.vertex_upload_time / 1000., st.textures_upload_time / 1000., st.draw_exec_time / 1000.,
 					st.program_cache_lookups_ellided, st.program_cache_lookups_total);

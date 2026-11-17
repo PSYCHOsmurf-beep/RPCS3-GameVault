@@ -37,6 +37,9 @@ jobs:
           pip install --break-system-packages ziglang==0.17.1 "meson>=1.4,<2"
           python3 -m ziglang version
 
+      - name: Check actual missing-pipeline draw counters
+        run: python3 uwp/tests/check-pipeline-readiness.py
+
       - name: Compile generated INVERT fragment shaders
         run: python3 uwp/tests/check-invert-shaders.py
 
