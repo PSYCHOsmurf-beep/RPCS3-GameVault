@@ -561,6 +561,21 @@ error_code sceNpTrophyRegisterContext(ppu_thread& ppu, u32 context, u32 handle, 
 {
 	sceNpTrophy.warning("sceNpTrophyRegisterContext(context=0x%x, handle=0x%x, statusCb=*0x%x, arg=*0x%x, options=0x%llx)", context, handle, statusCb, arg, options);
 
+	// Bounded phase markers per registration; no per-frame/per-poll logging.
+	const auto trace = [context](const char* phase, s32 status = -1, s32 completed = -1)
+	{
+#ifdef RPCS3_UWP
+		sceNpTrophy.notice("UWP trophy flow: context %u phase %s status %d completed %d sysutil reads %u",
+			context, phase, status, completed, get_sysutil_cb_manager_read_count());
+#else
+		(void)context;
+		(void)phase;
+		(void)status;
+		(void)completed;
+#endif
+	};
+	trace("register-enter");
+
 	auto& trophy_manager = g_fxo->get<sce_np_trophy_manager>();
 
 	std::shared_lock lock(trophy_manager.mtx);
@@ -628,13 +643,18 @@ error_code sceNpTrophyRegisterContext(ppu_thread& ppu, u32 context, u32 handle, 
 
 	// "Ask permission" to install the trophy data.
 	// The callback is called once and then if it returns >= 0 the cb is called through events(coming from vsh) that are passed to the CB through cellSysutilCheckCallback
-	if (statusCb(ppu, context, trp_status, 0, 0, arg) < 0)
+	trace("initial-callback-enter", trp_status);
+	const s32 initial_result = statusCb(ppu, context, trp_status, 0, 0, arg);
+	trace("initial-callback-return", initial_result);
+	if (initial_result < 0)
 	{
 		on_error();
 		return SCE_NP_TROPHY_ERROR_PROCESSING_ABORTED;
 	}
 
+	trace("manager-lock-enter");
 	std::unique_lock lock2(trophy_manager.mtx);
+	trace("manager-lock-acquired");
 
 	// Rerun error checks, the callback could have changed stuff by calling sceNpTrophy functions internally
 
@@ -666,6 +686,7 @@ error_code sceNpTrophyRegisterContext(ppu_thread& ppu, u32 context, u32 handle, 
 		return SCE_NP_TROPHY_ERROR_UNKNOWN_HANDLE;
 	}
 
+	trace("trp-header-enter");
 	TRPLoader trp(stream);
 	if (!trp.LoadHeader())
 	{
@@ -707,6 +728,7 @@ error_code sceNpTrophyRegisterContext(ppu_thread& ppu, u32 context, u32 handle, 
 		}
 	}
 
+	trace("trp-install-enter");
 	if (!trp.Install(trophyPath))
 	{
 		sceNpTrophy.error("sceNpTrophyRegisterContext(): Failed to install trophy context '%s' (%s)", trophyPath, fs::g_tls_error);
@@ -714,11 +736,14 @@ error_code sceNpTrophyRegisterContext(ppu_thread& ppu, u32 context, u32 handle, 
 		return SCE_NP_TROPHY_ERROR_ILLEGAL_UPDATE;
 	}
 
+	trace("trp-install-return");
 	const auto& tropusr = ctxt->tropusr = std::make_unique<TROPUSRLoader>();
 	const std::string trophyUsrPath = trophyPath + "/TROPUSR.DAT";
 	const std::string trophyConfPath = trophyPath + "/TROPCONF.SFM";
 
+	trace("tropusr-load-enter");
 	ensure(tropusr->Load(trophyUsrPath, trophyConfPath).success);
+	trace("tropusr-load-return");
 
 	if (g_cfg.net.psn_status == np_psn_status::psn_rpcn)
 	{
@@ -761,6 +786,7 @@ error_code sceNpTrophyRegisterContext(ppu_thread& ppu, u32 context, u32 handle, 
 		lock2.unlock();
 	}
 
+	trace("progress-dispatch-enter");
 	lv2_obj::sleep(ppu);
 	{
 		const s32 progress_cb_count = ::narrow<s32>(tropusr->GetTrophiesCount()) - 1;
@@ -791,10 +817,14 @@ error_code sceNpTrophyRegisterContext(ppu_thread& ppu, u32 context, u32 handle, 
 					// One status max per cellSysutilCheckCallback call
 					*queued += 1;
 
-					sysutil_register_cb([statusCb, status, context, completed, arg, queued](ppu_thread& cb_ppu) -> s32
+					sysutil_register_cb([statusCb, status, context, completed, arg, queued, trace](ppu_thread& cb_ppu) -> s32
 					{
 						// TODO: it is possible that we need to check the return value here as well.
+						if (completed == 0 || completed == status.second)
+							trace("progress-callback-enter", status.first, completed);
 						statusCb(cb_ppu, context, status.first, completed, status.second, arg);
+						if (completed == 0 || completed == status.second)
+							trace("progress-callback-return", status.first, completed);
 
 						if (queued && (*queued)-- == 1)
 						{
@@ -833,6 +863,7 @@ error_code sceNpTrophyRegisterContext(ppu_thread& ppu, u32 context, u32 handle, 
 		}
 	}
 
+	trace("register-return");
 	return CELL_OK;
 }
 

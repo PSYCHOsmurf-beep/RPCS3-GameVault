@@ -5,7 +5,7 @@
          IgnorableNamespaces="uap rescap">
   <!-- RPCS3 for Game Vault: a fork of RPCS3 for Xbox by emelin2004 (GPL-2), its own app so it installs beside the
        original. Publisher must match the Game Vault signing certificate. -->
-  <Identity Name="GamerDad.RPCS3ForGameVault" Publisher="CN=GamerDad" Version="0.1.35.11" ProcessorArchitecture="x64" />
+  <Identity Name="GamerDad.RPCS3ForGameVault" Publisher="CN=GamerDad" Version="0.1.35.13" ProcessorArchitecture="x64" />
   <Properties>
     <DisplayName>RPCS3 for Game Vault</DisplayName>
     <PublisherDisplayName>Skitzelles (Game Vault), from RPCS3 for Xbox by emelin2004</PublisherDisplayName>
