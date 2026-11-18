@@ -440,35 +440,58 @@ public:
 	template <typename Disposer>
 	usz evict_idle_pipelines(usz max_live, u64 min_idle_us, const pipeline_type* keep1, const pipeline_type* keep2, Disposer&& dispose)
 	{
-		if (!max_live || m_storage.size() <= max_live)
+		if (!max_live)
 		{
 			return 0;
 		}
 
-		std::lock_guard lock(m_pipeline_mutex);
-
-		const u64 now = get_system_time();
-		std::vector<std::pair<u64, typename decltype(m_storage)::iterator>> idle;
-		for (auto it = m_storage.begin(); it != m_storage.end(); ++it)
+		std::vector<pipeline_storage_type> evicted;
 		{
-			const auto* prog = it->second.get();
-			if (prog && prog != keep1 && prog != keep2 && now - prog->uwp_last_use >= min_idle_us)
+			std::lock_guard lock(m_pipeline_mutex);
+			if (m_storage.size() <= max_live)
 			{
-				idle.emplace_back(prog->uwp_last_use, it);
+				return 0; // Total entries also bound the number of live entries.
+			}
+			const u64 now = get_system_time();
+			usz live_count = 0;
+			std::vector<std::pair<u64, typename decltype(m_storage)::iterator>> idle;
+			for (auto it = m_storage.begin(); it != m_storage.end(); ++it)
+			{
+				const auto* prog = it->second.get();
+				if (!prog)
+				{
+					continue; // Pending compilations do not consume the live-pipeline budget.
+				}
+				++live_count;
+				if (prog != keep1 && prog != keep2 && now - prog->uwp_last_use >= min_idle_us)
+				{
+					idle.emplace_back(prog->uwp_last_use, it);
+				}
+			}
+
+			if (live_count <= max_live || idle.empty())
+			{
+				return 0;
+			}
+			const usz target = max_live - max_live / 8;
+			const usz count = std::min(idle.size(), live_count - target);
+			std::partial_sort(idle.begin(), idle.begin() + count, idle.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+			evicted.reserve(count);
+			for (usz i = 0; i < count; i++)
+			{
+				evicted.emplace_back(std::move(idle[i].second->second));
+				m_storage.erase(idle[i].second);
 			}
 		}
 
-		const usz target = max_live - max_live / 8;
-		const usz count = std::min(idle.size(), m_storage.size() - std::min(m_storage.size(), target));
-		std::partial_sort(idle.begin(), idle.begin() + count, idle.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-
-		for (usz i = 0; i < count; i++)
+		// Keep the same deferred GPU disposal path, but release the cache lock
+		// before handing ownership to the resource manager.
+		for (auto& prog : evicted)
 		{
-			dispose(idle[i].second->second);
-			m_storage.erase(idle[i].second);
+			dispose(prog);
 		}
 
-		return count;
+		return evicted.size();
 	}
 
 	usz pipeline_count() const

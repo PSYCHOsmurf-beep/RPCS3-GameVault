@@ -40,6 +40,9 @@ jobs:
       - name: Check actual missing-pipeline draw counters
         run: python3 uwp/tests/check-pipeline-readiness.py
 
+      - name: Check UWP live-pipeline eviction accounting
+        run: python3 uwp/tests/check-pipeline-eviction.py
+
       - name: Compile generated INVERT fragment shaders
         run: python3 uwp/tests/check-invert-shaders.py
 
