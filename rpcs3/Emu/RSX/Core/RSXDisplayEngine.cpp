@@ -120,13 +120,6 @@ namespace rsx
 			return;
 		}
 
-		if (!m_queued_flip.pop(buffer))
-		{
-			// Frame was not queued before flipping
-			m_pump->on_frame_end(m_pump->get_context(), buffer, true);
-			ensure(m_queued_flip.pop(buffer));
-		}
-
 		double limit = 0.;
 		const auto frame_limit = g_disable_frame_limit ? frame_limit_type::none : g_cfg.video.frame_limit;
 
@@ -197,6 +190,16 @@ namespace rsx
 		else
 		{
 			flip_notification_count = 1;
+		}
+
+		// A PS3-native vsync flip may return above and retry until the next vblank.
+		// Consume its queue entry only once it can proceed; otherwise every retry
+		// fabricates another frame end and overwrites the queued frame statistics.
+		if (!m_queued_flip.pop(buffer))
+		{
+			// Frame was not queued before flipping
+			m_pump->on_frame_end(m_pump->get_context(), buffer, true);
+			ensure(m_queued_flip.pop(buffer));
 		}
 
 		int_flip_index += flip_notification_count;
