@@ -346,5 +346,8 @@ void sysutil_unregister_cb_with_id()
 using SysutilMenuOpenStatus = SysutilEventStatus<CELL_SYSUTIL_SYSTEM_MENU_OPEN>;
 
 extern void sysutil_register_cb(std::function<s32(ppu_thread&)>&&);
+
+// Number of callbacks entered by cellSysutilCheckCallback, including ones still executing.
+extern u64 get_sysutil_cb_manager_read_count();
 extern s32 sysutil_send_system_cmd(u64 status, u64 param);
 s32 sysutil_check_name_string(const char* src, s32 minlen, s32 maxlen);
