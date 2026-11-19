@@ -9,6 +9,9 @@
 // No logging, allocation, waiting or guest/scheduler state changes on the hot path.
 namespace uwp_rsx_diagnostics
 {
+	// Enables low-rate syscall counters only after the no-frame reporter detects a stall.
+	inline std::atomic<bool> stall_sampling_enabled{false};
+
 	enum class phase : std::uint32_t
 	{
 		idle,

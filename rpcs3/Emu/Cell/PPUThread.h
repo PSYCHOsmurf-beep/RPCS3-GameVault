@@ -319,6 +319,15 @@ public:
 	const char* last_function{}; // Sticky copy of current_function, is not cleared on function return
 	const char* current_module{}; // Current module name, for savestates.
 
+#ifdef RPCS3_UWP
+	// Filled only while the UWP no-frame reporter is sampling. Lets a stall snapshot
+	// distinguish a guest that repeatedly sleeps from one blocked in another syscall.
+	atomic_t<u64> uwp_stall_usleep_calls{0};
+	atomic_t<u64> uwp_stall_usleep_total_us{0};
+	atomic_t<u64> uwp_stall_usleep_max_us{0};
+	atomic_t<u32> uwp_stall_usleep_max_cia{0};
+#endif
+
 	const bool is_interrupt_thread; // True for interrupts-handler threads
 
 	// Thread name

@@ -11,6 +11,9 @@
 #include "Emu/system_config.h"
 #include "sys_event.h"
 #include "sys_process.h"
+#ifdef RPCS3_UWP
+#include "uwp_rsx_diagnostics.h"
+#endif
 
 #include <thread>
 #include <deque>
@@ -466,6 +469,20 @@ error_code sys_timer_usleep(ppu_thread& ppu, u64 sleep_time)
 		{
 			sleep_time = std::max<u64>(1, utils::sub_saturate<u64>(sleep_time, -add_time));
 		}
+
+#ifdef RPCS3_UWP
+		if (uwp_rsx_diagnostics::stall_sampling_enabled.load(std::memory_order_relaxed))
+		{
+			ppu.uwp_stall_usleep_calls++;
+			ppu.uwp_stall_usleep_total_us += sleep_time;
+			const u64 previous_max = +ppu.uwp_stall_usleep_max_us;
+			if (sleep_time > previous_max)
+			{
+				ppu.uwp_stall_usleep_max_cia = ppu.cia;
+				ppu.uwp_stall_usleep_max_us = sleep_time;
+			}
+		}
+#endif
 
 		lv2_obj::sleep(ppu, g_cfg.core.sleep_timers_accuracy < sleep_timers_accuracy_level::_usleep ? sleep_time : 0);
 
