@@ -1741,21 +1741,10 @@ namespace
 		static u32 last_change = 0;
 		static u32 reports = 0;
 		static uwp_rsx_diagnostics::stall_schedule schedule;
-		const auto clear_usleep_window = []
-		{
-			idm::select<named_thread<ppu_thread>>([](u32, ppu_thread& ppu)
-			{
-				ppu.uwp_stall_usleep_calls.exchange(0);
-				ppu.uwp_stall_usleep_total_us.exchange(0);
-				ppu.uwp_stall_usleep_max_us.exchange(0);
-				ppu.uwp_stall_usleep_max_cia.exchange(0);
-			});
-		};
 
 		if (Emu.IsStopped(true) || !Emu.IsRunning())
 		{
 			uwp_rsx_diagnostics::stall_sampling_enabled.store(false, std::memory_order_relaxed);
-			clear_usleep_window();
 			last_change = ticks;
 			reports = 0;
 			schedule.reset();
@@ -1773,7 +1762,6 @@ namespace
 			if (reports)
 				sys_log.always()("UWP stall: frames resumed after %.2fs", (ticks - last_change) / 100.0);
 			uwp_rsx_diagnostics::stall_sampling_enabled.store(false, std::memory_order_relaxed);
-			clear_usleep_window();
 			last_serial = serial;
 			last_change = ticks;
 			reports = 0;
