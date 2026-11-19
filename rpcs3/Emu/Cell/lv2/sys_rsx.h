@@ -5,6 +5,8 @@
 #ifdef RPCS3_UWP
 #include <string>
 std::string uwp_sys_rsx_vblank_snapshot();
+std::string uwp_sys_rsx_lock_snapshot();
+std::string uwp_sys_rsx_queue_snapshot();
 #endif
 
 class cpu_thread;

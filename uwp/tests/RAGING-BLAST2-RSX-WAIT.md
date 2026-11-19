@@ -78,3 +78,35 @@ record, nested/early-return cleanup, concurrent snapshot coherence, bounded late
 cadence and the extracted production scheduler method's busy-lock/cap/preservation
 paths. It substitutes scheduler types/formatter; it does not compile all RPCS3 or
 prove Xbox timing. The native-flip regression remains a separate required check.
+
+## Lock owner and GCM queue state (follow-up, uncommitted review build)
+
+Evidence that motivated this: in the official log's first (unmatched) boot, main_thread
+at 0x8a1bb4 left `sys_rsx_context_attribute` with CELL_EAGAIN at shutdown. That return
+exists only on the `_sys_rsx_lock_context_calls` try-lock path, so main_thread was waiting
+for `sys_rsx_mtx`. `_gcm_intr_thread` was sampled in `sys_event_queue_receive`, which does
+not match PR 20100's exact cycle. The earlier diagnostics could not name the lock holder.
+
+Each stall report now adds two lines:
+
+- `UWP rsx lock: owner=<ppu|vblank|other-cpu|host> id=... site=... pkg=... held=...ms`
+  is published by whichever of the six `sys_rsx_mtx` sites holds it exclusively. It is set
+  after acquisition and cleared before release. The RSX engine thread is exempt and never
+  publishes. "no recorded owner" means free, a shared (non-UWP kernel explorer) reader, or
+  a publication racing the sample.
+- `UWP rsx queue 0x..: events=N/CAP exists=.. waiting-receivers=R first=0x..` reads the
+  GCM handler queue (last created by context_allocate) through IDM with a try-lock on the
+  queue mutex. "busy" means the queue mutex was held at that instant.
+
+Interpretation (needs repeated coherent samples, not one line):
+
+- The PR 20100 family is supported when the owner is vblank pkg=0xfed with a growing hold
+  time, the VBlank phase cycles through event-full-wait/scheduler-check/retry, events is
+  at CAP with zero waiting receivers, main_thread shows rsx-phase=context-lock, and the
+  scheduler snapshot shows _gcm_intr_thread runnable but suspended.
+- It is refuted by a different owner, a non-full queue, or a waiting receiver.
+
+Host check: `python3 uwp/tests/check-stall-diagnostics.py` now also covers owner
+publication/clear under a real mutex, the exempt null record and concurrent coherence.
+The full sys_rsx.cpp was not compiled on the host (macOS Apple clang 14 lacks
+`<source_location>`). The Xbox build compile and run are still unverified.

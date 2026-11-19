@@ -39,6 +39,78 @@ static void uwp_rsx_call_phase(uwp_rsx_diagnostics::phase phase)
 {
 	uwp_rsx_diagnostics::set_current_phase(phase);
 }
+
+// Current exclusive holder of sys_rsx_mtx (any context; normally only one exists).
+static uwp_rsx_diagnostics::lock_owner_record s_uwp_rsx_lock_owner;
+
+// Last GCM handler event queue created by sys_rsx_context_allocate. Holding only
+// the ID lets the reporter take a reference through IDM instead of touching a
+// context whose lifetime is protected by the (possibly stuck) sys_rsx_mtx.
+static atomic_t<u32> s_uwp_rsx_queue_id{0};
+
+static uwp_rsx_diagnostics::owner_snapshot uwp_rsx_owner(uwp_rsx_diagnostics::lock_site site, u32 package = 0)
+{
+	using namespace uwp_rsx_diagnostics;
+	owner_snapshot owner{};
+	owner.site = site;
+	owner.package = package;
+	owner.acquired_us = get_system_time();
+
+	if (const auto ppu = cpu_thread::get_current<ppu_thread>())
+	{
+		owner.kind = owner_kind::ppu;
+		owner.thread_id = ppu->id;
+	}
+	else if (const auto cpu = get_current_cpu_thread())
+	{
+		owner.kind = owner_kind::other_cpu;
+		owner.thread_id = cpu->id;
+	}
+	else
+	{
+		owner.kind = package == 0xFED ? owner_kind::vblank : owner_kind::host;
+	}
+
+	return owner;
+}
+
+std::string uwp_sys_rsx_lock_snapshot()
+{
+	uwp_rsx_diagnostics::owner_snapshot owner;
+	if (!s_uwp_rsx_lock_owner.read(owner))
+		return "UWP rsx lock: no recorded owner (free, shared reader, or publication in progress)";
+	const u64 now = get_system_time();
+	return fmt::format("UWP rsx lock: owner=%s id=0x%x site=%s pkg=0x%x held=%.3fms",
+		uwp_rsx_diagnostics::owner_kind_name(owner.kind), owner.thread_id, uwp_rsx_diagnostics::lock_site_name(owner.site),
+		owner.package, now >= owner.acquired_us ? (now - owner.acquired_us) / 1000.0 : 0.0);
+}
+
+std::string uwp_sys_rsx_queue_snapshot()
+{
+	const u32 queue_id = s_uwp_rsx_queue_id.load();
+	if (!queue_id)
+		return "UWP rsx queue: not created";
+
+	const auto queue = idm::get_unlocked<lv2_obj, lv2_event_queue>(queue_id);
+	if (!queue)
+		return fmt::format("UWP rsx queue 0x%x: not found", queue_id);
+
+	// Never wait: a sender or receiver may be stuck while holding it.
+	std::unique_lock lock(queue->mutex, std::try_to_lock);
+	if (!lock)
+		return fmt::format("UWP rsx queue 0x%x: busy (mutex held)", queue_id);
+
+	u32 receivers = 0;
+	u32 first_receiver = 0;
+	for (cpu_thread* cpu = queue->pq; cpu && receivers < 64; cpu = cpu->get_next_cpu())
+	{
+		if (!receivers++)
+			first_receiver = cpu->id;
+	}
+
+	return fmt::format("UWP rsx queue 0x%x: events=%u/%u exists=%u waiting-receivers=%u%s first=0x%x",
+		queue_id, static_cast<u32>(queue->events.size()), u32{queue->size}, u32{+queue->exists}, receivers, receivers >= 64 ? "+" : "", first_receiver);
+}
 #endif
 
 // Unknown error code returned by sys_rsx_context_attribute
@@ -493,6 +565,9 @@ error_code sys_rsx_context_allocate(cpu_thread& cpu, vm::ptr<u32> context_id, vm
 	const auto render = rsx::get_current_renderer();
 
 	std::lock_guard lock(render->sys_rsx_mtx);
+#ifdef RPCS3_UWP
+	const uwp_rsx_diagnostics::scoped_owner uwp_owner(&s_uwp_rsx_lock_owner, uwp_rsx_owner(uwp_rsx_diagnostics::lock_site::context_allocate));
+#endif
 
 	// The first context with a FIFO channel starts the device
 	bool first = true;
@@ -582,6 +657,9 @@ error_code sys_rsx_context_allocate(cpu_thread& cpu, vm::ptr<u32> context_id, vm
 	sys_event_port_create(cpu, vm::get_addr(&driverInfo.handler_queue), SYS_EVENT_PORT_LOCAL, 0);
 	ctx->fw.rsx_event_port = driverInfo.handler_queue;
 	sys_event_queue_create(cpu, vm::get_addr(&driverInfo.handler_queue), attr, 0, 0x20);
+#ifdef RPCS3_UWP
+	s_uwp_rsx_queue_id.store(driverInfo.handler_queue);
+#endif
 	sys_event_port_connect_local(cpu, ctx->fw.rsx_event_port, driverInfo.handler_queue);
 
 	ctx->display_buffers_count = 0;
@@ -612,6 +690,9 @@ error_code sys_rsx_context_free(ppu_thread& ppu, u32 context_id)
 	const auto render = rsx::get_current_renderer();
 
 	std::scoped_lock lock(render->sys_rsx_mtx);
+#ifdef RPCS3_UWP
+	const uwp_rsx_diagnostics::scoped_owner uwp_owner(&s_uwp_rsx_lock_owner, uwp_rsx_owner(uwp_rsx_diagnostics::lock_site::context_free));
+#endif
 	rsx::eng_lock fifo_lock(render);
 
 	const auto ctx = _sys_rsx_get_lv2_context(render, context_id);
@@ -709,6 +790,9 @@ error_code sys_rsx_context_iomap(cpu_thread& cpu, u32 context_id, u64 io, u64 ea
 	}
 
 	std::scoped_lock lock(render->sys_rsx_mtx);
+#ifdef RPCS3_UWP
+	const uwp_rsx_diagnostics::scoped_owner uwp_owner(&s_uwp_rsx_lock_owner, uwp_rsx_owner(uwp_rsx_diagnostics::lock_site::context_iomap));
+#endif
 
 	const auto ctx = _sys_rsx_get_lv2_context(render, context_id);
 
@@ -779,6 +863,9 @@ error_code sys_rsx_context_iounmap(cpu_thread& cpu, u32 context_id, u64 io, u64 
 	}
 
 	std::scoped_lock lock(render->sys_rsx_mtx);
+#ifdef RPCS3_UWP
+	const uwp_rsx_diagnostics::scoped_owner uwp_owner(&s_uwp_rsx_lock_owner, uwp_rsx_owner(uwp_rsx_diagnostics::lock_site::context_iounmap));
+#endif
 
 	const auto ctx = _sys_rsx_get_lv2_context(render, context_id);
 
@@ -846,6 +933,12 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 		// The calling thread is stopping
 		return CELL_EAGAIN;
 	}
+
+#ifdef RPCS3_UWP
+	// RSX engine calls skip the lock and must not publish ownership.
+	const uwp_rsx_diagnostics::scoped_owner uwp_owner(render->is_current_thread() ? nullptr : &s_uwp_rsx_lock_owner,
+		uwp_rsx_owner(uwp_rsx_diagnostics::lock_site::context_attribute, package_id));
+#endif
 
 #ifdef RPCS3_UWP
 	uwp_rsx_call_phase(uwp_rsx_diagnostics::phase::context_lookup);
@@ -1318,6 +1411,9 @@ error_code sys_rsx_device_map(cpu_thread& cpu, vm::ptr<u64> dev_addr, vm::ptr<u6
 	const auto render = rsx::get_current_renderer();
 
 	std::scoped_lock lock(render->sys_rsx_mtx);
+#ifdef RPCS3_UWP
+	const uwp_rsx_diagnostics::scoped_owner uwp_owner(&s_uwp_rsx_lock_owner, uwp_rsx_owner(uwp_rsx_diagnostics::lock_site::device_map));
+#endif
 
 	if (!render->device_addr)
 	{
