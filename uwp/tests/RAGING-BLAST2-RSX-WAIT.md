@@ -26,6 +26,9 @@ callback backlog alone is not evidence that trophy handling caused the freeze.
 - Per-PPU active RSX call: six original arguments, phase and call age, published
   through atomic fields with sequence validation. Nested calls restore their
   outer record. No per-call log writes, guest-register edits or waits.
+- A separate record for non-CPU VBlank-thread package0xFED calls. Thread-local
+  scope routes event-send stages to the actual sender's record; unrelated PPU/RSX
+  senders cannot overwrite its phase.
 - Scheduler snapshot: try-lock only; pending acknowledgements, ready flag,
   capacity, at most 64 runnable records with ack_suspend, and timed-wait deadline.
   Formatting happens after unlocking and outside ID-manager enumeration locks.
@@ -52,6 +55,21 @@ after it appears and collect the live log; preserve it again after quitting.
 No callback bypass, forced wakeup, frame-limit change, resource-lifetime change
 or storage mutation is made by this patch. Do not label the freeze fixed after
 host tests or a successful cross-build.
+
+## Specific upstream hypothesis (open, unmerged)
+
+[RPCS3 PR20100](https://github.com/RPCS3/rpcs3/pull/20100), retrieved19Nov2026,
+reports a deadlock introduced by42dd822 (the context-serialization change also
+present in this fork): VBlank package0xFED holds sys_rsx_mtx while send_event
+retries a full queue; the consumer needs the mutex. It is explicitly test-only,
+unmerged. Its reported affected games do not establish a Raging Blast2 fix.
+The reviewer considers the approach sound but requests implementation cleanup.
+
+Repeated VBlank event-full-wait snapshots plus a PPU waiting on context-lock
+would support this specific cycle; inspect protected scheduler states as well.
+VBlank idle/differentphase or a PPU stuck elsewhere argues against that cycle in
+this capture. This build records both sides; it does not import the experimental
+lock-release patch. The old20sample cap can miss the post-install state entirely.
 
 ## Checks
 

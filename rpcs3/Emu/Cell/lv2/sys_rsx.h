@@ -2,6 +2,10 @@
 
 #include "Emu/Memory/vm_ptr.h"
 #include "Emu/Cell/ErrorCodes.h"
+#ifdef RPCS3_UWP
+#include <string>
+std::string uwp_sys_rsx_vblank_snapshot();
+#endif
 
 class cpu_thread;
 

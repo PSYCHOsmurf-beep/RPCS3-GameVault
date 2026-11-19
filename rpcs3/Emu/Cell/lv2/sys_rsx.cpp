@@ -19,10 +19,25 @@
 LOG_CHANNEL(sys_rsx);
 
 #ifdef RPCS3_UWP
+// Only the non-CPU VBlank thread writes this record. PPU and RSX-engine calls
+// are excluded at entry; thread-local phases prevent unrelated event senders
+// from overwriting the VBlank thread's wait stage.
+static uwp_rsx_diagnostics::call_record s_uwp_vblank_call;
+
+std::string uwp_sys_rsx_vblank_snapshot()
+{
+	uwp_rsx_diagnostics::snapshot call;
+	if (!s_uwp_vblank_call.read(call))
+		return "UWP vblank RSX: idle or publication in progress";
+	const u64 now = get_system_time();
+	return fmt::format("UWP vblank RSX: phase=%s call-age=%.3fms ctx=0x%x pkg=0x%x args=0x%x/0x%x/0x%x/0x%x",
+		uwp_rsx_diagnostics::phase_name(call.current), now >= call.started_us ? (now - call.started_us) / 1000.0 : 0.0,
+		call.args[0], call.args[1], call.args[2], call.args[3], call.args[4], call.args[5]);
+}
+
 static void uwp_rsx_call_phase(uwp_rsx_diagnostics::phase phase)
 {
-	if (const auto ppu = cpu_thread::get_current<ppu_thread>())
-		ppu->uwp_rsx_call.set_phase(phase);
+	uwp_rsx_diagnostics::set_current_phase(phase);
 }
 #endif
 
@@ -226,6 +241,9 @@ bool rsx::thread::send_event(rsx::context* ctx, u64 data1, u64 event_flags, u64 
 		return true;
 	}
 
+#ifdef RPCS3_UWP
+	uwp_rsx_call_phase(uwp_rsx_diagnostics::phase::event_send);
+#endif
 	auto error = sys_event_port_send(ctx->fw.rsx_event_port, data1, event_flags, data3);
 
 	while (error + 0u == CELL_EBUSY)
@@ -801,8 +819,10 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 {
 #ifdef RPCS3_UWP
 	const auto uwp_ppu = cpu_thread::get_current<ppu_thread>();
-	const uwp_rsx_diagnostics::scoped_call uwp_call(uwp_ppu ? &uwp_ppu->uwp_rsx_call : nullptr,
-		{context_id, package_id, a3, a4, a5, a6}, uwp_ppu ? get_system_time() : 0);
+	auto* const uwp_record = uwp_ppu ? &uwp_ppu->uwp_rsx_call :
+		(!get_current_cpu_thread() && package_id == 0xFED ? &s_uwp_vblank_call : nullptr);
+	const uwp_rsx_diagnostics::scoped_call uwp_call(uwp_record,
+		{context_id, package_id, a3, a4, a5, a6}, uwp_record ? get_system_time() : 0);
 #endif
 	if (auto cpu = get_current_cpu_thread())
 	{

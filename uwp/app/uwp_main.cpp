@@ -27,6 +27,7 @@
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/SPUThread.h"
 #include "Emu/Cell/lv2/sys_sync.h"
+#include "Emu/Cell/lv2/sys_rsx.h"
 #include "Emu/emu_callbacks.h"
 #include "Emu/IdManager.h"
 #include "Emu/RSX/Core/RSXRendererFactory.h"
@@ -1791,6 +1792,7 @@ namespace
 		});
 		// Do not nest the scheduler mutex under the ID-manager enumeration lock.
 		fmt::append(out, "\n  %s", lv2_obj::uwp_scheduler_snapshot());
+		fmt::append(out, "\n  %s", uwp_sys_rsx_vblank_snapshot());
 		if (const auto render = rsx::get_current_renderer(); render && render->ctrl)
 		{
 			fmt::append(out, "\n  RSX: get=0x%x put=0x%x last semaphore 0x%x (cmd at 0x%x)", +render->ctrl->get, +render->ctrl->put,

@@ -97,24 +97,36 @@ namespace uwp_rsx_diagnostics
 		}
 	};
 
+	inline thread_local call_record* current_record = nullptr;
+
+	inline void set_current_phase(phase value)
+	{
+		if (current_record)
+			current_record->set_phase(value);
+	}
+
 	class scoped_call
 	{
 		call_record* m_record;
+		call_record* m_previous_record;
 		snapshot m_previous;
 		bool m_restore = false;
 
 	public:
 		scoped_call(call_record* record, const std::array<std::uint64_t, 6>& args, std::uint64_t started_us)
 			: m_record(record)
+			, m_previous_record(current_record)
 		{
 			if (m_record)
 			{
 				m_restore = m_record->read(m_previous);
 				m_record->begin(args, started_us);
 			}
+			current_record = m_record;
 		}
 		~scoped_call()
 		{
+			current_record = m_previous_record;
 			if (m_record)
 			{
 				if (m_restore)

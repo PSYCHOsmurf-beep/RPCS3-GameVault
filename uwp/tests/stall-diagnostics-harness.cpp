@@ -17,6 +17,7 @@ int main()
 		assert(record.read(sample));
 		assert(sample.args[1] == 0x103 && sample.started_us == 100);
 		assert(sample.current == phase::event_scheduler_check);
+		assert(current_record == &record);
 		{
 			scoped_call nested(&record, {9, 0x102, 0, 0, 0, 0}, 150);
 			record.set_phase(phase::display_flip);
@@ -25,11 +26,28 @@ int main()
 		assert(record.read(sample) && sample.args[1] == 0x103 && sample.started_us == 100);
 		assert(sample.current == phase::event_scheduler_check);
 	}
+	assert(current_record == nullptr);
 	assert(!record.read(sample));
 	record.set_phase(phase::event_retry); // An unrelated send_event must not create an active call.
 	assert(!record.read(sample));
 	{
 		scoped_call no_ppu(nullptr, {}, 0);
+		set_current_phase(phase::event_full_wait);
+		assert(current_record == nullptr);
+	}
+	// A different host sender must not overwrite the VBlank sender's record.
+	{
+		scoped_call vblank(&record, {1, 0xFED, 0, 0, 0, 0}, 300);
+		set_current_phase(phase::event_full_wait);
+		std::thread unrelated([] { set_current_phase(phase::event_retry); });
+		unrelated.join();
+		assert(record.read(sample) && sample.current == phase::event_full_wait);
+		{
+			scoped_call no_record(nullptr, {}, 0);
+			set_current_phase(phase::event_retry);
+		}
+		assert(current_record == &record);
+		assert(record.read(sample) && sample.current == phase::event_full_wait);
 	}
 	const auto early_return = [&]
 	{
