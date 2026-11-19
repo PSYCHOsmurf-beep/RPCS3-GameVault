@@ -459,6 +459,11 @@ public:
 	static void prepare_for_sleep(cpu_thread& cpu);
 	static ppu_thread* get_running_ppu(u32 index);
 
+#ifdef RPCS3_UWP
+	// Bounded diagnostic read; never wait for the scheduler mutex.
+	static std::string uwp_scheduler_snapshot();
+#endif
+
 	struct notify_all_t
 	{
 		notify_all_t() noexcept

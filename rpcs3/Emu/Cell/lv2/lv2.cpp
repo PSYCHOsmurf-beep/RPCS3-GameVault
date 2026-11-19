@@ -1369,6 +1369,69 @@ namespace cpu_counter
 	void remove(cpu_thread*) noexcept;
 }
 
+#ifdef RPCS3_UWP
+std::string lv2_obj::uwp_scheduler_snapshot()
+{
+	struct thread_snapshot
+	{
+		u32 id;
+		bs_t<cpu_flag> state;
+		s32 priority;
+		bool ack_suspend;
+	};
+
+	std::array<thread_snapshot, 64> threads{};
+	u32 count = 0;
+	u32 pending = 0;
+	u32 capacity = 0;
+	usz waiting_count = 0;
+	u64 oldest_until = 0;
+	u64 now = 0;
+	bool ready = false;
+	bool truncated = false;
+	{
+		std::unique_lock lock(g_mutex, std::try_to_lock);
+		if (!lock.owns_lock())
+		{
+			return "UWP scheduler: unavailable (scheduler mutex busy)";
+		}
+
+		pending = g_pending;
+		ready = g_scheduler_ready.load();
+		capacity = g_cfg.core.ppu_threads;
+		waiting_count = g_waiting.size();
+		if (waiting_count)
+		{
+			oldest_until = g_waiting.front().first;
+		}
+		now = get_guest_system_time();
+
+		auto target = g_ppu;
+		for (; target && count < threads.size(); target = target->next_ppu)
+		{
+			threads[count++] = {target->id, +target->state, static_cast<s32>(target->prio.load().prio), target->ack_suspend};
+		}
+		truncated = target != nullptr;
+	}
+
+	// Format outside the scheduler lock. Do not take IDM locks or log while holding it.
+	std::string out = fmt::format("UWP scheduler: pending %u ready %u capacity %u runnable %u%s timed waiters %zu guest now %llu us",
+		pending, ready ? 1u : 0u, capacity, count, truncated ? "+ (truncated)" : "", waiting_count, now);
+	if (waiting_count)
+	{
+		fmt::append(out, " oldest until %llu us (%s %llu us)", oldest_until,
+			oldest_until <= now ? "overdue by" : "remaining", oldest_until <= now ? now - oldest_until : oldest_until - now);
+	}
+	for (u32 i = 0; i < count; ++i)
+	{
+		const auto& thread = threads[i];
+		fmt::append(out, "\n  runnable[%u] id=0x%x state=%s priority=%d ack_suspend=%u",
+			i, thread.id, thread.state, thread.priority, thread.ack_suspend ? 1u : 0u);
+	}
+	return out;
+}
+#endif
+
 std::string lv2_obj::name64(u64 name_u64)
 {
 	const auto ptr = reinterpret_cast<const char*>(&name_u64);

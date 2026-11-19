@@ -8,6 +8,9 @@
 
 #include "util/logs.hpp"
 #include "util/v128.hpp"
+#ifdef RPCS3_UWP
+#include "lv2/uwp_rsx_diagnostics.h"
+#endif
 
 LOG_CHANNEL(ppu_log, "PPU");
 
@@ -387,6 +390,11 @@ public:
 	ppu_thread* next_cpu{}; // LV2 sleep queues' node link
 	ppu_thread* next_ppu{}; // LV2 PPU running queue's node link
 	bool ack_suspend = false;
+
+#ifdef RPCS3_UWP
+	// Append diagnostics so existing register/hypervisor field offsets do not move.
+	uwp_rsx_diagnostics::call_record uwp_rsx_call;
+#endif
 
 	be_t<u64>* get_stack_arg(s32 i, u64 align = alignof(u64));
 	void exec_task();

@@ -1732,17 +1732,19 @@ namespace
 	}
 
 	// Startup stall diagnosis: while emulation runs and no new frame arrived for a second, log
-	// once a second (up to 20 times per stall) where each PPU thread is.
+	// early once-a-second samples, then five late samples (up to 10 minutes).
 	void report_stall(u32 ticks)
 	{
 		static u64 last_serial = 0;
 		static u32 last_change = 0;
 		static u32 reports = 0;
+		static uwp_rsx_diagnostics::stall_schedule schedule;
 
 		if (Emu.IsStopped(true) || !Emu.IsRunning())
 		{
 			last_change = ticks;
 			reports = 0;
+			schedule.reset();
 			return;
 		}
 
@@ -1759,11 +1761,12 @@ namespace
 			last_serial = serial;
 			last_change = ticks;
 			reports = 0;
+			schedule.reset();
 			return;
 		}
 
 		const u32 idle = ticks - last_change;
-		if (idle < 100 || idle % 100 != 0 || reports >= 20)
+		if (!schedule.should_report(idle))
 			return;
 
 		reports++;
@@ -1773,11 +1776,21 @@ namespace
 			const char* func = ppu.current_function;
 			fmt::append(out, "\n  %s: cia=0x%x state=%s func=%s last=%s", ppu.get_name(), ppu.cia, +ppu.state,
 				func ? func : "-", ppu.last_function ? ppu.last_function : "-");
+			uwp_rsx_diagnostics::snapshot call;
+			if (ppu.uwp_rsx_call.read(call))
+			{
+				const u64 now = get_system_time();
+				fmt::append(out, " rsx-phase=%s call-age=%.3fms ctx=0x%x pkg=0x%x args=0x%x/0x%x/0x%x/0x%x",
+					uwp_rsx_diagnostics::phase_name(call.current), now >= call.started_us ? (now - call.started_us) / 1000.0 : 0.0,
+					call.args[0], call.args[1], call.args[2], call.args[3], call.args[4], call.args[5]);
+			}
 		});
 		idm::select<named_thread<spu_thread>>([&](u32, spu_thread& spu)
 		{
 			fmt::append(out, "\n  %s: pc=0x%x state=%s", spu.get_name(), spu.pc, +spu.state);
 		});
+		// Do not nest the scheduler mutex under the ID-manager enumeration lock.
+		fmt::append(out, "\n  %s", lv2_obj::uwp_scheduler_snapshot());
 		if (const auto render = rsx::get_current_renderer(); render && render->ctrl)
 		{
 			fmt::append(out, "\n  RSX: get=0x%x put=0x%x last semaphore 0x%x (cmd at 0x%x)", +render->ctrl->get, +render->ctrl->put,

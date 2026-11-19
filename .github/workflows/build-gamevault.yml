@@ -40,6 +40,9 @@ jobs:
       - name: Check deferred native flip queue handling
         run: python3 uwp/tests/check-deferred-flip.py
 
+      - name: Check bounded RSX and scheduler stall diagnostics
+        run: python3 uwp/tests/check-stall-diagnostics.py
+
       - name: LLVM cache key
         id: llvmkey
         run: echo "sha=$(git -C 3rdparty/llvm/llvm rev-parse HEAD)-$(sha256sum uwp/toolchain/build-llvm.sh uwp/toolchain/toolchain-uwp.cmake uwp/toolchain/zig-cc uwp/toolchain/zig-c++ | sha256sum | cut -c1-16)" >> $GITHUB_OUTPUT

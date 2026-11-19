@@ -18,6 +18,14 @@
 
 LOG_CHANNEL(sys_rsx);
 
+#ifdef RPCS3_UWP
+static void uwp_rsx_call_phase(uwp_rsx_diagnostics::phase phase)
+{
+	if (const auto ppu = cpu_thread::get_current<ppu_thread>())
+		ppu->uwp_rsx_call.set_phase(phase);
+}
+#endif
+
 // Unknown error code returned by sys_rsx_context_attribute
 enum sys_rsx_error : s32
 {
@@ -222,6 +230,9 @@ bool rsx::thread::send_event(rsx::context* ctx, u64 data1, u64 event_flags, u64 
 
 	while (error + 0u == CELL_EBUSY)
 	{
+#ifdef RPCS3_UWP
+		uwp_rsx_call_phase(uwp_rsx_diagnostics::phase::event_full_wait);
+#endif
 		auto cpu = get_current_cpu_thread();
 
 		if (cpu && cpu->get_class() == thread_class::ppu)
@@ -236,12 +247,18 @@ bool rsx::thread::send_event(rsx::context* ctx, u64 data1, u64 event_flags, u64 
 		if (cpu && cpu->get_class() == thread_class::rsx)
 			cpu->cpu_wait({});
 
+#ifdef RPCS3_UWP
+		uwp_rsx_call_phase(uwp_rsx_diagnostics::phase::event_scheduler_check);
+#endif
 		if (Emu.IsStopped() || (cpu && cpu->check_state()))
 		{
 			error = 0;
 			break;
 		}
 
+#ifdef RPCS3_UWP
+		uwp_rsx_call_phase(uwp_rsx_diagnostics::phase::event_retry);
+#endif
 		error = sys_event_port_send(ctx->fw.rsx_event_port, data1, event_flags, data3);
 	}
 
@@ -782,6 +799,11 @@ error_code sys_rsx_context_iounmap(cpu_thread& cpu, u32 context_id, u64 io, u64 
  */
 error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64 a4, u64 a5, u64 a6)
 {
+#ifdef RPCS3_UWP
+	const auto uwp_ppu = cpu_thread::get_current<ppu_thread>();
+	const uwp_rsx_diagnostics::scoped_call uwp_call(uwp_ppu ? &uwp_ppu->uwp_rsx_call : nullptr,
+		{context_id, package_id, a3, a4, a5, a6}, uwp_ppu ? get_system_time() : 0);
+#endif
 	if (auto cpu = get_current_cpu_thread())
 	{
 		cpu->state += cpu_flag::wait;
@@ -796,12 +818,18 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 	const auto render = rsx::get_current_renderer();
 
 	std::unique_lock lock(render->sys_rsx_mtx, std::defer_lock);
+#ifdef RPCS3_UWP
+	uwp_rsx_call_phase(uwp_rsx_diagnostics::phase::context_lock);
+#endif
 	if (!_sys_rsx_lock_context_calls(render, lock))
 	{
 		// The calling thread is stopping
 		return CELL_EAGAIN;
 	}
 
+#ifdef RPCS3_UWP
+	uwp_rsx_call_phase(uwp_rsx_diagnostics::phase::context_lookup);
+#endif
 	const auto ctx = _sys_rsx_get_lv2_context(render, context_id);
 
 	if (!ctx)
@@ -823,6 +851,9 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 		const u64 put = static_cast<u32>(a4);
 		const u64 get_put = put << 32 | get;
 
+#ifdef RPCS3_UWP
+		uwp_rsx_call_phase(uwp_rsx_diagnostics::phase::fifo_control);
+#endif
 		set_rsx_dmactl(render, ctx, get_put);
 		break;
 	}
@@ -875,6 +906,9 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 			}
 		}
 
+#ifdef RPCS3_UWP
+		uwp_rsx_call_phase(uwp_rsx_diagnostics::phase::display_flip);
+#endif
 		if (!render->request_emu_flip(ctx, flip_idx))
 		{
 			if (auto cpu = get_current_cpu_thread())
@@ -895,7 +929,13 @@ error_code sys_rsx_context_attribute(u32 context_id, u32 package_id, u64 a3, u64
 		driverInfo.head[a3].lastQueuedBufferId = static_cast<u32>(a4);
 		driverInfo.head[a3].flipFlags |= 0x40000000 | (1 << a4);
 
+#ifdef RPCS3_UWP
+		uwp_rsx_call_phase(uwp_rsx_diagnostics::phase::frame_end);
+#endif
 		render->on_frame_end(ctx, static_cast<u32>(a4));
+#ifdef RPCS3_UWP
+		uwp_rsx_call_phase(uwp_rsx_diagnostics::phase::event_send);
+#endif
 		if (!render->send_event(ctx, 0, SYS_RSX_EVENT_QUEUE_BASE << a3, 0))
 		{
 			break;
