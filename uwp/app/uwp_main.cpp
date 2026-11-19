@@ -28,6 +28,7 @@
 #include "Emu/Cell/SPUThread.h"
 #include "Emu/Cell/lv2/sys_sync.h"
 #include "Emu/Cell/lv2/sys_rsx.h"
+#include "Emu/Cell/lv2/uwp_rsx_diagnostics.h"
 #include "Emu/emu_callbacks.h"
 #include "Emu/IdManager.h"
 #include "Emu/RSX/Core/RSXRendererFactory.h"
@@ -1740,9 +1741,21 @@ namespace
 		static u32 last_change = 0;
 		static u32 reports = 0;
 		static uwp_rsx_diagnostics::stall_schedule schedule;
+		const auto clear_usleep_window = []
+		{
+			idm::select<named_thread<ppu_thread>>([](u32, ppu_thread& ppu)
+			{
+				ppu.uwp_stall_usleep_calls.exchange(0);
+				ppu.uwp_stall_usleep_total_us.exchange(0);
+				ppu.uwp_stall_usleep_max_us.exchange(0);
+				ppu.uwp_stall_usleep_max_cia.exchange(0);
+			});
+		};
 
 		if (Emu.IsStopped(true) || !Emu.IsRunning())
 		{
+			uwp_rsx_diagnostics::stall_sampling_enabled.store(false, std::memory_order_relaxed);
+			clear_usleep_window();
 			last_change = ticks;
 			reports = 0;
 			schedule.reset();
@@ -1759,6 +1772,8 @@ namespace
 		{
 			if (reports)
 				sys_log.always()("UWP stall: frames resumed after %.2fs", (ticks - last_change) / 100.0);
+			uwp_rsx_diagnostics::stall_sampling_enabled.store(false, std::memory_order_relaxed);
+			clear_usleep_window();
 			last_serial = serial;
 			last_change = ticks;
 			reports = 0;
@@ -1770,13 +1785,21 @@ namespace
 		if (!schedule.should_report(idle))
 			return;
 
+		uwp_rsx_diagnostics::stall_sampling_enabled.store(true, std::memory_order_relaxed);
 		reports++;
 		std::string out = fmt::format("UWP stall: no new frame for %.0fs (frame %u):", idle / 100.0, serial);
 		idm::select<named_thread<ppu_thread>>([&](u32, ppu_thread& ppu)
 		{
 			const char* func = ppu.current_function;
-			fmt::append(out, "\n  %s: cia=0x%x state=%s func=%s last=%s", ppu.get_name(), ppu.cia, +ppu.state,
-				func ? func : "-", ppu.last_function ? ppu.last_function : "-");
+			fmt::append(out, "\n  %s: cia=0x%x state=%s func=%s last=%s module=%s", ppu.get_name(), ppu.cia, +ppu.state,
+				func ? func : "-", ppu.last_function ? ppu.last_function : "-", ppu.current_module ? ppu.current_module : "-");
+			const u64 usleep_calls = ppu.uwp_stall_usleep_calls.exchange(0);
+			const u64 usleep_total_us = ppu.uwp_stall_usleep_total_us.exchange(0);
+			const u64 usleep_max_us = ppu.uwp_stall_usleep_max_us.exchange(0);
+			const u32 usleep_max_cia = ppu.uwp_stall_usleep_max_cia.exchange(0);
+			if (usleep_calls)
+				fmt::append(out, " usleep-window calls=%llu requested=%.3fms max=%.3fms at-cia=0x%x",
+					usleep_calls, usleep_total_us / 1000.0, usleep_max_us / 1000.0, usleep_max_cia);
 			uwp_rsx_diagnostics::snapshot call;
 			if (ppu.uwp_rsx_call.read(call))
 			{

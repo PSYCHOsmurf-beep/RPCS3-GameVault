@@ -110,3 +110,19 @@ Host check: `python3 uwp/tests/check-stall-diagnostics.py` now also covers owner
 publication/clear under a real mutex, the exempt null record and concurrent coherence.
 The full sys_rsx.cpp was not compiled on the host (macOS Apple clang 14 lacks
 `<source_location>`). The Xbox build compile and run are still unverified.
+
+## Follow-up: J-Stars multi-second no-frame gaps
+
+The separate Spartan Test .15 J-Stars capture records 10s, 15s, and 8s no-frame
+gaps. During those samples, the main PPU repeatedly reports `sys_timer_usleep`,
+the RSX GET and PUT are equal, and the RSX queue is empty. Existing diagnostics do
+not capture the requested sleep duration or the game module at the caller CIA, so
+they cannot distinguish repeated short sleeps from one long sleep. The RSX lock
+cycle is not supported by those particular snapshots.
+
+The follow-up instrumentation records per-PPU usleep counts, cumulative requested
+duration, longest request and caller CIA only while the no-frame reporter is active;
+it also includes the sampled module name. It does not alter sleep duration,
+scheduler decisions, guest results, RSX work or rendering. The next capture should
+decide whether this is a guest sleep/poll loop and map its caller before any
+behavioral change is considered. This does not explain the missing fight graphics.
