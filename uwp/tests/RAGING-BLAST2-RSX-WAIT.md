@@ -126,3 +126,31 @@ it also includes the sampled module name. It does not alter sleep duration,
 scheduler decisions, guest results, RSX work or rendering. The next capture should
 decide whether this is a guest sleep/poll loop and map its caller before any
 behavioral change is considered. This does not explain the missing fight graphics.
+
+## .16 emulation-error capture and source match (20 Nov)
+
+The read-only Xbox capture is saved under
+`RPCS3 Packaging/Raging Blast Usleep 0.1.35.16/emulation-error-20261119T215612Z/`.
+The screenshot shows an unhandled `0xC0000005` in `rpcs3_uwp.exe`. The live log
+records the same fault at 0:00:18.968, with `RDX=0xCCCCCCCCCCCCCCCC`, and the
+faulting instruction address is image-base + `0x12f73`. The crash handler emitted
+no stack frames, so the exact object lifetime failure is not yet known.
+
+Disassembly of the exact packaged `.16` executable maps image-base + `0x12f73`
+to the atomic exchange at `ppu + 0xa38`; the following instructions exchange the
+other three `uwp_stall_usleep_*` fields. This uniquely matches the new
+`clear_usleep_window` callback added in commit `76fc7c8` inside `report_stall`.
+That callback enumerated PPU objects when emulation was stopped and whenever the
+frame serial changed. `report_stall` runs from the shell loop at 10 ms intervals,
+so the added enumeration could run repeatedly during idle and normal frame flow.
+The invalid `0xCCCC...` object pointer plus exact instruction/source match make
+this diagnostic cleanup the demonstrated crash site. The underlying reason that
+the selected PPU pointer was poisoned remains unknown.
+
+Local correction in progress: remove those extra `idm::select` cleanup traversals.
+The counters are exchange-reset in the stall report itself, start zero-initialized,
+and sampling is still disabled on stop/resume. This changes only the new
+diagnostic bookkeeping; it does not touch J-Stars emulation, scheduling, RSX or
+rendering. The correction is not yet built or confirmed on Xbox. A new test build
+must verify the app starts, J-Stars launches, and a no-frame sample still includes
+the usleep window fields.
