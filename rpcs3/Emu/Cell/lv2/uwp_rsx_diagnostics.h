@@ -139,6 +139,131 @@ namespace uwp_rsx_diagnostics
 		scoped_call& operator=(const scoped_call&) = delete;
 	};
 
+	// Which lv2 sys_rsx call currently holds sys_rsx_mtx exclusively.
+	enum class lock_site : std::uint32_t
+	{
+		none,
+		context_allocate,
+		context_free,
+		context_iomap,
+		context_iounmap,
+		context_attribute,
+		device_map,
+	};
+
+	inline const char* lock_site_name(lock_site value)
+	{
+		switch (value)
+		{
+		case lock_site::none: return "none";
+		case lock_site::context_allocate: return "context_allocate";
+		case lock_site::context_free: return "context_free";
+		case lock_site::context_iomap: return "context_iomap";
+		case lock_site::context_iounmap: return "context_iounmap";
+		case lock_site::context_attribute: return "context_attribute";
+		case lock_site::device_map: return "device_map";
+		}
+		return "unknown";
+	}
+
+	enum class owner_kind : std::uint32_t
+	{
+		none,
+		ppu,       // thread_id is the PPU id, e.g. 0x1000000
+		vblank,    // non-CPU host thread calling package 0xFED
+		other_cpu, // SPU/RSX cpu_thread; thread_id is its id
+		host,      // any other non-CPU host thread
+	};
+
+	inline const char* owner_kind_name(owner_kind value)
+	{
+		switch (value)
+		{
+		case owner_kind::none: return "none";
+		case owner_kind::ppu: return "ppu";
+		case owner_kind::vblank: return "vblank";
+		case owner_kind::other_cpu: return "other-cpu";
+		case owner_kind::host: return "host";
+		}
+		return "unknown";
+	}
+
+	struct owner_snapshot
+	{
+		owner_kind kind = owner_kind::none;
+		lock_site site = lock_site::none;
+		std::uint32_t thread_id = 0;
+		std::uint32_t package = 0;
+		std::uint64_t acquired_us = 0;
+	};
+
+	// Written only by the thread holding sys_rsx_mtx exclusively: publish right
+	// after acquiring, clear right before releasing. The mutex itself serializes
+	// writers; the sequence counter lets an unlocked reader reject torn samples.
+	class lock_owner_record
+	{
+		std::atomic<std::uint64_t> m_sequence{0};
+		std::atomic<owner_kind> m_kind{owner_kind::none};
+		std::atomic<lock_site> m_site{lock_site::none};
+		std::atomic<std::uint32_t> m_thread_id{0};
+		std::atomic<std::uint32_t> m_package{0};
+		std::atomic<std::uint64_t> m_acquired_us{0};
+
+	public:
+		void acquire(const owner_snapshot& owner)
+		{
+			m_sequence.fetch_add(1);
+			m_site.store(owner.site);
+			m_thread_id.store(owner.thread_id);
+			m_package.store(owner.package);
+			m_acquired_us.store(owner.acquired_us);
+			m_kind.store(owner.kind);
+			m_sequence.fetch_add(1);
+		}
+
+		void release()
+		{
+			m_sequence.fetch_add(1);
+			m_kind.store(owner_kind::none);
+			m_sequence.fetch_add(1);
+		}
+
+		// False when unowned or when a publication raced the read.
+		bool read(owner_snapshot& result) const
+		{
+			const auto before = m_sequence.load();
+			if (before & 1)
+				return false;
+			result.kind = m_kind.load();
+			result.site = m_site.load();
+			result.thread_id = m_thread_id.load();
+			result.package = m_package.load();
+			result.acquired_us = m_acquired_us.load();
+			return before == m_sequence.load() && result.kind != owner_kind::none;
+		}
+	};
+
+	class scoped_owner
+	{
+		lock_owner_record* m_record;
+
+	public:
+		// Construct only after the lock is held, so destruction precedes unlock.
+		scoped_owner(lock_owner_record* record, const owner_snapshot& owner)
+			: m_record(record)
+		{
+			if (m_record)
+				m_record->acquire(owner);
+		}
+		~scoped_owner()
+		{
+			if (m_record)
+				m_record->release();
+		}
+		scoped_owner(const scoped_owner&) = delete;
+		scoped_owner& operator=(const scoped_owner&) = delete;
+	};
+
 	// Preserve early samples, then retain bounded observations after slow host I/O.
 	class stall_schedule
 	{

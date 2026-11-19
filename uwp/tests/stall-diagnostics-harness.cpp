@@ -2,7 +2,10 @@
 
 #include <cassert>
 #include <iostream>
+#include <mutex>
+#include <string>
 #include <thread>
+#include <vector>
 
 using namespace uwp_rsx_diagnostics;
 
@@ -101,5 +104,62 @@ int main()
 	assert(!schedule.should_report(2'500));
 	assert(schedule.should_report(3'000));
 	assert(schedule.should_report(6'000)); // Old twenty-sample cap missed this post-install observation.
-	std::cout << "RSX record coherence, scope cleanup and bounded late sampling passed\n";
+	// sys_rsx_mtx owner: published only while held, cleared before unlock.
+	{
+		lock_owner_record owner_record;
+		owner_snapshot owner;
+		assert(!owner_record.read(owner));
+		std::mutex mtx;
+		{
+			std::lock_guard lock(mtx);
+			scoped_owner held(&owner_record, {owner_kind::vblank, lock_site::context_attribute, 0, 0xFED, 500});
+			assert(owner_record.read(owner));
+			assert(owner.kind == owner_kind::vblank && owner.site == lock_site::context_attribute);
+			assert(owner.package == 0xFED && owner.acquired_us == 500);
+		}
+		assert(!owner_record.read(owner));
+		{
+			scoped_owner exempt(nullptr, {owner_kind::other_cpu, lock_site::context_attribute, 7, 0xFEC, 1});
+			assert(!owner_record.read(owner)); // RSX engine calls skip the lock and publish nothing.
+		}
+
+		// Writers serialized by a real mutex; an unlocked reader never sees mixed fields
+		// and never sees an owner while the mutex is free.
+		std::atomic<bool> owner_done{false};
+		std::atomic<unsigned> owner_samples{0};
+		std::thread owner_reader([&]
+		{
+			while (!owner_done.load())
+			{
+				owner_snapshot seen;
+				if (owner_record.read(seen))
+				{
+					assert(seen.thread_id == seen.package && seen.acquired_us == seen.thread_id);
+					assert(seen.site == (seen.thread_id % 2 ? lock_site::context_iomap : lock_site::context_attribute));
+					++owner_samples;
+				}
+			}
+		});
+		std::vector<std::thread> writers;
+		for (std::uint32_t w = 0; w < 4; ++w)
+		{
+			writers.emplace_back([&, w]
+			{
+				for (std::uint32_t i = 1 + w; i <= 40'000; i += 4)
+				{
+					std::lock_guard lock(mtx);
+					scoped_owner held(&owner_record, {owner_kind::ppu, i % 2 ? lock_site::context_iomap : lock_site::context_attribute, i, i, i});
+				}
+			});
+		}
+		for (auto& writer : writers)
+			writer.join();
+		owner_done.store(true);
+		owner_reader.join();
+		assert(!owner_record.read(owner));
+		assert(owner_samples.load() > 0);
+		assert(std::string(owner_kind_name(owner_kind::vblank)) == "vblank");
+		assert(std::string(lock_site_name(lock_site::device_map)) == "device_map");
+	}
+	std::cout << "RSX record coherence, lock-owner publication, scope cleanup and bounded late sampling passed\n";
 }

@@ -1793,6 +1793,9 @@ namespace
 		// Do not nest the scheduler mutex under the ID-manager enumeration lock.
 		fmt::append(out, "\n  %s", lv2_obj::uwp_scheduler_snapshot());
 		fmt::append(out, "\n  %s", uwp_sys_rsx_vblank_snapshot());
+		// Who holds sys_rsx_mtx, and whether the GCM handler queue is full with no waiting receiver.
+		fmt::append(out, "\n  %s", uwp_sys_rsx_lock_snapshot());
+		fmt::append(out, "\n  %s", uwp_sys_rsx_queue_snapshot());
 		if (const auto render = rsx::get_current_renderer(); render && render->ctrl)
 		{
 			fmt::append(out, "\n  RSX: get=0x%x put=0x%x last semaphore 0x%x (cmd at 0x%x)", +render->ctrl->get, +render->ctrl->put,
