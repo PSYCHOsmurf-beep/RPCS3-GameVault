@@ -364,6 +364,12 @@ void VKVertexDecompilerThread::insertMainStart(std::stringstream& OS)
 	properties2.require_clip_plane_functions = true;
 	properties2.emulate_zclip_transform = true;
 	properties2.emulate_depth_clip_only = vk::g_render_device->get_shader_types_support().allow_float64;
+#ifdef RPCS3_UWP
+	// From Skitzelles' RPCS3 for Game Vault (71be8e8): the single-precision depth clip transform on the Xbox. The double
+	// one needs floor() and division on doubles, which D3D12 does not have; Dozen's lowering gave wrong depth, so Dynasty
+	// Warriors: Gundam Reborn's mission world was drawn but always hidden behind the sky.
+	properties2.emulate_depth_clip_only = false;
+#endif
 	properties2.low_precision_tests = vk::is_NVIDIA(vk::get_driver_vendor());
 	properties2.require_explicit_invariance = (vk::is_NVIDIA(vk::get_driver_vendor()) && g_cfg.video.shader_precision != gpu_preset_level::low);
 	properties2.require_instanced_render = !!(m_prog.ctrl & RSX_SHADER_CONTROL_INSTANCED_CONSTANTS);
