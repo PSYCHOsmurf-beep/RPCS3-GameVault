@@ -476,6 +476,54 @@ namespace vk
 			m_device = VK_NULL_HANDLE;
 		}
 
+#ifdef RPCS3_UWP
+		bool descriptor_table_t::uwp_release_pool()
+		{
+			if (!m_descriptor_pool)
+			{
+				return false;
+			}
+
+			// Writes still queued for the current set go out first: that set lives in this pool. Then the
+			// set is forgotten, so the next commit() takes the "no set yet" path (all slots written into a
+			// set from a new pool), the same path as this table's first draw.
+			m_descriptor_set.flush();
+			m_descriptor_set = static_cast<VkDescriptorSet>(VK_NULL_HANDLE);
+
+			// Destroyed by the gc once the GPU is past the frames that may still read its sets. Only
+			// programs idle for seconds get here, so none of their sets are in flight anyway.
+			struct pool_holder
+			{
+				std::unique_ptr<vk::descriptor_pool> pool;
+				~pool_holder()
+				{
+					if (pool)
+					{
+						pool->destroy();
+					}
+				}
+			};
+
+			auto holder = std::make_unique<pool_holder>();
+			holder->pool = std::move(m_descriptor_pool);
+			vk::get_gc()->dispose(holder);
+			return true;
+		}
+
+		u32 program::uwp_release_descriptor_pools()
+		{
+			u32 released = 0;
+			for (auto& set : m_sets)
+			{
+				if (set.m_device && set.uwp_release_pool())
+				{
+					released++;
+				}
+			}
+			return released;
+		}
+#endif
+
 		void descriptor_table_t::init(VkDevice dev)
 		{
 			m_device = dev;
@@ -728,6 +776,20 @@ namespace vk
 				}
 				m_descriptor_types[i] = descriptor_type_map[i];
 			}
+
+#ifdef RPCS3_UWP
+			// Spartan: descriptor_set storage is sized for at most this many descriptors per commit (descriptors.h).
+			u32 total_descriptors = 0;
+			for (const auto& size : m_descriptor_pool_sizes)
+			{
+				total_descriptors += size.descriptorCount;
+			}
+			if (total_descriptors > vk::descriptor_set::uwp_max_descriptors_per_commit)
+			{
+				rsx_log.error("UWP: descriptor set layout with %u descriptors, over the %u a commit is sized for",
+					total_descriptors, static_cast<u32>(vk::descriptor_set::uwp_max_descriptors_per_commit));
+			}
+#endif
 
 			m_descriptor_set_layout = vk::descriptors::create_layout(bindings);
 		}
